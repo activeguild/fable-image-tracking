@@ -361,6 +361,10 @@ export class ImageTracker {
     // Photometric verification every frame: kills stale poses quickly when
     // the target disappears, is occluded, or motion blur wipes the texture,
     // instead of letting optical flow limp along on wrong content.
+    // With few inliers the geometric evidence is weak, so demand stronger
+    // photometric evidence before trusting the fit.
+    const nccFloor =
+      result.inliers.length < 20 ? Math.max(this.opts.minTrackNCC, 0.6) : this.opts.minTrackNCC;
     const ncc = appearanceNCC(
       this.target,
       result.inliers.map((i) => nextModel[i]),
@@ -369,7 +373,7 @@ export class ImageTracker {
       64,
       this.distortion
     );
-    if (ncc < this.opts.minTrackNCC) {
+    if (ncc < nccFloor) {
       this.lost();
       return;
     }
@@ -450,6 +454,8 @@ export class ImageTracker {
     if (!prior) return false;
     const refined = this.aligner.align(prior, pyramid[0].data, this.width, this.height, this.distortion);
     if (!refined || !this.isPlausible(refined.H)) return false;
+    // The rescue must also respect temporal shape continuity.
+    if (this.H && !this.shapeContinuous(this.H, refined.H, 0.2)) return false;
     const ncc = appearanceNCC(this.target, this.probePoints, refined.H, pyramid[0], 64, this.distortion);
     if (ncc < this.opts.minTrackNCC) return false;
 
@@ -592,6 +598,10 @@ export class ImageTracker {
     const maxE = Math.max(...edges);
     const minE = Math.min(...edges);
     if (minE < 1e-3 || maxE / minE > 12) return false;
+    // Opposite edges of a projected rectangle stay comparable under any
+    // realistic viewing angle; kite/spike quads (blurred-fit artefacts) don't.
+    const opp = (a: number, b: number) => Math.max(edges[a], edges[b]) / Math.max(1e-3, Math.min(edges[a], edges[b]));
+    if (opp(0, 2) > 3 || opp(1, 3) > 3) return false;
     return true;
   }
 

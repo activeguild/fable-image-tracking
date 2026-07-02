@@ -93,6 +93,23 @@ describe('QuadFilter', () => {
     expect(Math.abs(top - bottom) / top).toBeLessThan(0.2);
   });
 
+  it('skips single-glitch samples but accepts persistent shape change', () => {
+    const f = new QuadFilter({ minCutoff: 1000, beta: 1000 });
+    f.addSample(quad(0), 10.0);
+    // A kite: one corner flung far away (a bad measurement).
+    const kite = quad(0).map((c, i) => (i === 2 ? { x: c.x + 250, y: c.y - 150 } : c));
+    f.addSample(kite, 10.03);
+    const q = f.predict(10.04)!;
+    // The glitch sample was skipped: prediction still matches the good quad.
+    expect(Math.hypot(q[2].x - 110, q[2].y - 120)).toBeLessThan(10);
+
+    // But a persistent change is eventually admitted (3rd occurrence).
+    f.addSample(kite, 10.06);
+    f.addSample(kite, 10.09);
+    const q2 = f.predict(10.1)!;
+    expect(Math.hypot(q2[2].x - (110 + 250), q2[2].y - (120 - 150))).toBeLessThan(20);
+  });
+
   it('clears cleanly', () => {
     const f = new QuadFilter();
     f.addSample(quad(0), 10.0);
