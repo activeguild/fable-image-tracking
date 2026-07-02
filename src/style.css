@@ -38,8 +38,9 @@ body {
   pointer-events: none;
   max-width: none;
   z-index: 1;
-  will-change: transform;
+  will-change: transform, opacity;
   backface-visibility: hidden;
+  transition: opacity 0.12s linear;
 }
 
 #gl-canvas {
@@ -143,6 +144,15 @@ body {
 
 .panel a {
   color: #60a5fa;
+}
+
+.panel .option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #cbd5e1;
+  margin-top: 8px;
 }
 
 #start-button {

@@ -97,6 +97,15 @@ export class ARRenderer {
     this.debugGroup.visible = visible;
   }
 
+  /**
+   * Content confidence fade: 0 hides the content (tracking too weak to
+   * trust), 1 shows it. The planar element fades via CSS; 3D content toggles.
+   */
+  setContentOpacity(opacity: number): void {
+    if (this.planarEl) this.planarEl.style.opacity = String(opacity);
+    this.contentGroup.visible = opacity > 0.05;
+  }
+
   /** Switch the displayed content (cube, still image, or video). */
   setContent(spec: ContentSpec): void {
     this.content = spec;

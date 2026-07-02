@@ -30,6 +30,7 @@ const startOverlay = document.getElementById('start-overlay') as HTMLDivElement;
 const startButton = document.getElementById('start-button') as HTMLButtonElement;
 const uploadInput = document.getElementById('target-upload') as HTMLInputElement;
 const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
+const imuToggle = document.getElementById('imu-toggle') as HTMLInputElement;
 const contentSelect = document.getElementById('content-select') as HTMLSelectElement;
 
 const worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
@@ -103,6 +104,7 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
     bufferPool.push(msg.buffer);
     procCount++;
     lastResult = msg;
+    updateConfidenceGate(msg);
     // A lost frame does NOT clear the filters: single-frame dropouts (motion
     // blur, brief occlusion) are bridged by coasting on the last measurement
     // until it goes stale (maxAge), instead of blinking the content off.
@@ -171,6 +173,33 @@ function captureAndSend(nowMs: number): void {
   lastCaptureMs = nowMs;
   worker.postMessage({ type: 'frame', buffer, t: nowMs, gyro: gyroDelta }, [buffer]);
   workerBusy = true;
+}
+
+// -------------------------------------------------------- confidence gate
+// During violent motion the measurements degrade before they fail: rather
+// than show content that is sliding off the target, fade it out while the
+// tracked-point count is low and fade back once tracking is solid again.
+// Hysteresis (hide < 18, show >= 32, both needing 2 consecutive results)
+// keeps the opacity from pumping; single-frame dropouts are still bridged
+// invisibly by the coasting logic.
+const HIDE_BELOW_POINTS = 18;
+const SHOW_ABOVE_POINTS = 32;
+let contentShown = true;
+let weakStreak = 0;
+let strongStreak = 0;
+
+function updateConfidenceGate(msg: ResultMessage): void {
+  const weak = msg.state !== 'tracking' || msg.inlierCount < HIDE_BELOW_POINTS;
+  const strong = msg.state === 'tracking' && msg.inlierCount >= SHOW_ABOVE_POINTS;
+  weakStreak = weak ? weakStreak + 1 : 0;
+  strongStreak = strong ? strongStreak + 1 : 0;
+  if (contentShown && weakStreak >= 2) {
+    contentShown = false;
+    renderer?.setContentOpacity(0);
+  } else if (!contentShown && strongStreak >= 2) {
+    contentShown = true;
+    renderer?.setContentOpacity(1);
+  }
 }
 
 /**
@@ -253,10 +282,14 @@ async function start(): Promise<void> {
   startButton.disabled = true;
   statusEl.textContent = 'カメラ起動中...';
   try {
-    // Motion permission must be requested inside the click gesture (iOS).
-    const gyroPromise = gyro.start().then((ok) => {
-      gyroOn = ok;
-    });
+    // Two launch modes: with motion sensing (gyro fusion for fast-motion
+    // priors and display prediction) or camera-only. The permission must be
+    // requested inside the click gesture (iOS), so decide here.
+    const gyroPromise = imuToggle.checked
+      ? gyro.start().then((ok) => {
+          gyroOn = ok;
+        })
+      : Promise.resolve();
     await startCamera();
     await gyroPromise;
     setupProcessing();
