@@ -33,9 +33,9 @@ export class QuadFilter {
 
   constructor(options: QuadFilterOptions = {}) {
     this.maxAge = options.maxAge ?? 0.3;
-    this.maxHorizon = options.maxHorizon ?? 0.08;
-    const minCutoff = options.minCutoff ?? 0.8;
-    const beta = options.beta ?? 0.05;
+    this.maxHorizon = options.maxHorizon ?? 0.1;
+    const minCutoff = options.minCutoff ?? 1.2;
+    const beta = options.beta ?? 0.08;
     this.filters = Array.from({ length: 8 }, () => new OneEuroFilter(minCutoff, beta, 1.0));
   }
 

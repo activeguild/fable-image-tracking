@@ -204,11 +204,12 @@ function loop(now: number): void {
   // Feed the worker whenever it is idle (single frame in flight).
   if (workerReady && !workerBusy) captureAndSend(performance.now());
 
-  // Render at display rate with the pose extrapolated to "now".
-  const nowSec = performance.now() / 1000;
-  const pose = predictor.predict(nowSec);
+  // Render with the pose extrapolated to the *display* time: the frame we
+  // draw now is composited roughly one vsync later, so lead by one frame.
+  const displaySec = performance.now() / 1000 + Math.min(dt, 0.034);
+  const pose = predictor.predict(displaySec);
   renderer.updatePose(pose, timeSec, dt * 1.2);
-  renderer.updatePlanarQuad(quadFilter.predict(nowSec), procW, procH);
+  renderer.updatePlanarQuad(quadFilter.predict(displaySec), procW, procH);
   drawDebug();
 
   renderCount++;
