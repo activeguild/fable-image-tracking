@@ -103,11 +103,46 @@ describe('QuadFilter', () => {
     // The glitch sample was skipped: prediction still matches the good quad.
     expect(Math.hypot(q[2].x - 110, q[2].y - 120)).toBeLessThan(10);
 
-    // But a persistent change is eventually admitted (3rd occurrence).
+    // But a persistent change is eventually admitted (3rd occurrence) and
+    // converges toward it under the innovation rate limit.
     f.addSample(kite, 10.06);
     f.addSample(kite, 10.09);
-    const q2 = f.predict(10.1)!;
-    expect(Math.hypot(q2[2].x - (110 + 250), q2[2].y - (120 - 150))).toBeLessThan(20);
+    f.addSample(kite, 10.12);
+    f.addSample(kite, 10.15);
+    const q2 = f.predict(10.16)!;
+    expect(q2[2].x).toBeGreaterThan(200); // moving decisively toward 360
+  });
+
+  it('down-weights low-confidence measurements toward the prediction', () => {
+    const unfiltered = { minCutoff: 1000, beta: 1000 };
+    const f = new QuadFilter(unfiltered);
+    // Steady motion: +2 px per 20 ms sample.
+    f.addSample(quad(0), 10.0);
+    f.addSample(quad(2), 10.02);
+    // Next measurement SHOULD be ~4, but blur scattered it to 14 (+10 px off).
+    // With weight 0.2 the stored sample stays near the predicted 4.
+    f.addSample(quad(14), 10.04, 0.2);
+    const q = f.predict(10.04)!;
+    expect(q[0].x - 10).toBeGreaterThan(3);
+    expect(q[0].x - 10).toBeLessThan(7); // 4 + (14-4)*0.2 = 6
+  });
+
+  it('rate-limits large corrections even at full confidence', () => {
+    const unfiltered = { minCutoff: 1000, beta: 1000 };
+    const g = new QuadFilter(unfiltered);
+    g.addSample(quad(0), 10.0);
+    g.addSample(quad(2), 10.02);
+    // A +10 px innovation may only correct 3 + 35% of the gap this sample.
+    g.addSample(quad(14), 10.04, 1);
+    const x = g.predict(10.04)![0].x - 10;
+    expect(x).toBeGreaterThan(9); // 4 + (3 + 0.35*10) = 10.5
+    expect(x).toBeLessThan(12);
+    // Small innovations (steady tracking) pass through untouched.
+    const h = new QuadFilter(unfiltered);
+    h.addSample(quad(0), 10.0);
+    h.addSample(quad(2), 10.02);
+    h.addSample(quad(6), 10.04, 1); // innovation 2 px < 3 px floor
+    expect(h.predict(10.04)![0].x - 10).toBeCloseTo(6, 1);
   });
 
   it('clears cleanly', () => {

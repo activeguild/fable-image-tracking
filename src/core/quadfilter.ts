@@ -49,17 +49,55 @@ export class QuadFilter {
 
   private rejections = 0;
 
-  addSample(corners: Point2[], timeSec: number): void {
+  /**
+   * `weight` in (0, 1] is the measurement confidence (e.g. from the tracker's
+   * inlier count). Weak measurements - blur, few corners - are only partially
+   * blended toward the motion-predicted position, Kalman-style, so a noisy
+   * fix cannot yank the content while strong fixes pass through untouched.
+   */
+  addSample(corners: Point2[], timeSec: number, weight = 1): void {
     const c = new Array<number>(8);
     for (let i = 0; i < 4; i++) {
       c[i * 2] = corners[i].x;
       c[i * 2 + 1] = corners[i].y;
     }
+
+    const s1 = this.s1;
+    const s0 = this.s0;
+    if (s1 && s0) {
+      const dt = s1.t - s0.t;
+      const age = timeSec - s1.t;
+      if (dt > 1e-4 && dt <= 0.15 && age > 0 && age < 0.15) {
+        const k = Math.min(age / dt, 3);
+        let meanInnovation = 0;
+        const pred = new Array<number>(8);
+        for (let i = 0; i < 8; i++) {
+          pred[i] = s1.c[i] + (s1.c[i] - s0.c[i]) * k;
+        }
+        for (let i = 0; i < 4; i++) {
+          meanInnovation += Math.hypot(c[i * 2] - pred[i * 2], c[i * 2 + 1] - pred[i * 2 + 1]);
+        }
+        meanInnovation /= 4;
+        // Innovation rate limit: even a full-confidence measurement may only
+        // correct "3 px + 35% of the gap" per sample. Steady tracking
+        // (innovation < ~4.6 px) passes through untouched; discontinuities
+        // (replenish corrections, re-acquisitions) glide over ~3 samples
+        // instead of yanking the content.
+        let gain = Math.max(0.15, weight);
+        if (meanInnovation > 1e-6) {
+          gain = Math.min(gain, (3 + 0.35 * meanInnovation) / meanInnovation);
+        }
+        if (gain < 1) {
+          for (let i = 0; i < 8; i++) {
+            c[i] = pred[i] + (c[i] - pred[i]) * gain;
+          }
+        }
+      }
+    }
     // Admission control: a quad whose shape differs wildly from a sample
     // taken a few frames ago is a measurement glitch (no real motion changes
     // shape that fast). Skip it (coast) - unless it persists, then accept it
     // as a genuine change so we can never lock out real measurements.
-    const s1 = this.s1;
     if (s1 && timeSec - s1.t < 0.15 && !shapeConsistent(c, s1.c, 0.25)) {
       this.rejections++;
       if (this.rejections <= 2) return;
