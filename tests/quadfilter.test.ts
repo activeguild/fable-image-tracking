@@ -74,6 +74,25 @@ describe('QuadFilter', () => {
     expect(corrected[0].x).toBeCloseTo(10 + 0, 1); // model followed the reversal
   });
 
+  it('never lets a bad motion model deform the quad (rigidity guard)', () => {
+    const f = new QuadFilter({ minCutoff: 1000, beta: 1000 });
+    f.addSample(quad(0), 10.0);
+    f.addSample(quad(2), 10.03);
+    // Pathological model: flings a single corner far away (what a bad
+    // residual/glitch used to do under violent motion).
+    const evil = (corners: { x: number; y: number }[]) =>
+      corners.map((c, i) => (i === 2 ? { x: c.x + 300, y: c.y - 200 } : { ...c }));
+    const q = f.predict(10.06, evil)!;
+    expect(q).not.toBeNull();
+    // Guarded output stays close to the last measured quad, still rigid.
+    const drift = Math.hypot(q[2].x - (110 + 2), q[2].y - 120);
+    expect(drift).toBeLessThan(30);
+    // Shape sanity: opposite edges stay near-equal.
+    const top = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y);
+    const bottom = Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y);
+    expect(Math.abs(top - bottom) / top).toBeLessThan(0.2);
+  });
+
   it('clears cleanly', () => {
     const f = new QuadFilter();
     f.addSample(quad(0), 10.0);

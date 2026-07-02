@@ -375,6 +375,14 @@ export class ImageTracker {
       this.maybeCalibrateDistortion(refined.H, refined.err, pyramid);
     }
 
+    // Temporal shape gate: no real hand motion changes the projected quad's
+    // edge lengths by >15% in one frame against a static target. A fit that
+    // does is a blur/occlusion artefact that slipped past the other gates.
+    if (this.H && !this.shapeContinuous(this.H, result.H, 0.15)) {
+      if (!this.denseRescue(prior, pyramid)) this.lost();
+      return;
+    }
+
     this.prevH = this.H;
     this.H = result.H;
     this.framePoints = result.inliers.map((i) => nextFrame[i]);
@@ -527,6 +535,23 @@ export class ImageTracker {
   }
 
   // ------------------------------------------------------------------ misc
+
+  /** Edge/diagonal lengths of the projected quad must move smoothly. */
+  private shapeContinuous(prevH: Mat3, newH: Mat3, tol: number): boolean {
+    const a = projectCorners(prevH, this.target.width, this.target.height);
+    const b = projectCorners(newH, this.target.width, this.target.height);
+    const pairs = [
+      [0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3],
+    ];
+    for (const [i, j] of pairs) {
+      const la = Math.hypot(a[j].x - a[i].x, a[j].y - a[i].y);
+      if (la < 1e-6) return false;
+      const lb = Math.hypot(b[j].x - b[i].x, b[j].y - b[i].y);
+      const ratio = lb / la;
+      if (ratio < 1 - tol || ratio > 1 + tol) return false;
+    }
+    return true;
+  }
 
   /** Sanity checks on H: projected target corners must form a convex, sane quad. */
   private isPlausible(H: Mat3): boolean {
