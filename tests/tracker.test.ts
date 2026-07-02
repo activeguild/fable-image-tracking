@@ -76,7 +76,7 @@ describe('ImageTracker end-to-end', () => {
     const r1 = tracker.processFrame(renderFrame(targetImg, H1));
     expect(r1.state).toBe('tracking');
     expect(r1.H).not.toBeNull();
-    expect(maxCornerError(r1.H!, H1)).toBeLessThan(4);
+    expect(maxCornerError(r1.H!, H1)).toBeLessThan(1.5);
     expect(r1.pose).not.toBeNull();
     expect(r1.pose!.t[2]).toBeGreaterThan(0);
 
@@ -85,7 +85,7 @@ describe('ImageTracker end-to-end', () => {
       const H2 = similarity(0.55 + f * 0.01, 0.12 + (f + 1) * 0.02, 150 + (f + 1) * 4, 110 + (f + 1) * 2.5);
       const r = tracker.processFrame(renderFrame(targetImg, H2));
       expect(r.state).toBe('tracking');
-      expect(maxCornerError(r.H!, H2)).toBeLessThan(5);
+      expect(maxCornerError(r.H!, H2)).toBeLessThan(1.5);
     }
   });
 
@@ -122,7 +122,7 @@ describe('ImageTracker end-to-end', () => {
       const H = similarity(0.55, 0.1, 90 + steps[i], 110);
       const r = tracker.processFrame(renderFrame(targetImg, H));
       expect(r.state, `frame ${i}`).toBe('tracking');
-      expect(maxCornerError(r.H!, H)).toBeLessThan(6);
+      expect(maxCornerError(r.H!, H)).toBeLessThan(3);
     }
   });
 

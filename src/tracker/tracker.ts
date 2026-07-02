@@ -25,6 +25,7 @@ import {
   type Point2,
 } from '../core/homography';
 import { orthogonalityDefect, poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
+import { DenseAligner } from '../core/densealign';
 import type { CompiledTarget } from './target';
 
 export type TrackerState = 'searching' | 'tracking';
@@ -81,6 +82,7 @@ export class ImageTracker {
   private frameCounter = 0;
   private planeToFrame: Mat3 | null = null;
   private readonly initialFocal: number;
+  private readonly aligner: DenseAligner;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -102,6 +104,7 @@ export class ImageTracker {
     };
     this.intrinsics = options.intrinsics ?? defaultIntrinsics(frameWidth, frameHeight);
     this.initialFocal = this.intrinsics.fx;
+    this.aligner = new DenseAligner(target.gray, target.width, target.height);
   }
 
   /** Process one grayscale frame at the tracker's processing resolution. */
@@ -181,6 +184,10 @@ export class ImageTracker {
     const inlierModel = result.inliers.map((i) => src[i]);
     const ncc = appearanceNCC(this.target, inlierModel, result.H, pyramid[0]);
     if (ncc < this.opts.minDetectNCC) return;
+
+    // Subpixel dense refinement against the reference texture.
+    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
+    if (refined && this.isPlausible(refined)) result.H = refined;
 
     this.H = result.H;
     this.prevH = null; // fresh acquisition: no velocity estimate yet
@@ -275,6 +282,12 @@ export class ImageTracker {
       this.lost();
       return;
     }
+
+    // Dense subpixel refinement: point-based estimates carry per-corner LK
+    // noise; aligning the whole reference texture against the frame removes
+    // the residual sub-pixel swimming.
+    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
+    if (refined && this.isPlausible(refined)) result.H = refined;
 
     this.prevH = this.H;
     this.H = result.H;

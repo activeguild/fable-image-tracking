@@ -36,6 +36,7 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
   │             → RANSAC ホモグラフィ → 妥当性検査 → TRACKING へ
   └─ TRACKING:  ピラミッド Lucas-Kanade（等速運動予測でウォームスタート）
                 → forward-backward チェック → 事前値ゲート付き決定論的フィット
+                → 密なサブピクセル精密化（逆合成 Gauss-Newton 画像位置合わせ）
                 → フォトメトリック検証（NCC）で見た目の整合を毎フレーム確認
                 → 点が減ったらモデルから再投影で補充、破綻したら SEARCHING へ
   → H を分解して 6DoF ポーズ (H = K [r1 r2 t]) をキャプチャ時刻付きで返送
@@ -73,6 +74,7 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
 | `src/core/opticalflow.ts` | ピラミッド Lucas-Kanade（Bouguet 方式、バイリニア補間、反復解法） |
 | `src/core/pose.ts` | ホモグラフィ分解による 6DoF ポーズ復元（H = K [r1 r2 t]、回転の直交化、正面制約） |
 | `src/core/filter.ts` | One-Euro フィルタ（位置のジッタ除去） |
+| `src/core/densealign.ts` | 逆合成 Gauss-Newton による密なホモグラフィ精密化（サブピクセル、ゲイン/バイアス照明不変） |
 | `src/core/imageops.ts` | グレースケール変換、バイリニアリサイズ、積分画像、スケールピラミッド |
 | `src/tracker/target.ts` | ターゲットコンパイル（マルチスケール特徴点バンク生成） |
 | `src/tracker/tracker.ts` | detect/track ステートマシン、FB チェック、点の補充、H の妥当性検査、NCC によるフォトメトリック検証 |

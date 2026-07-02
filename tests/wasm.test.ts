@@ -162,7 +162,7 @@ describe('end-to-end tracking on wasm kernels', () => {
         const b = applyHomography(H, x, y);
         maxErr = Math.max(maxErr, Math.hypot(a.x - b.x, a.y - b.y));
       }
-      expect(maxErr).toBeLessThan(6);
+      expect(maxErr).toBeLessThan(1.5);
     }
   });
 });
