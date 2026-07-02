@@ -19,25 +19,43 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
 
 ## パイプライン全体像
 
-8th Wall / Vuforia / MindAR と同じ古典的な **detect → track** の 2 段構成です。
+8th Wall / Vuforia / MindAR と同じ古典的な **detect → track** の 2 段構成を、
+**Web Worker + WASM** で描画（60fps）と処理を分離して実行します。
 
 ```
-[オフライン] ターゲットコンパイル
+[オフライン] ターゲットコンパイル（Worker 内）
   参照画像 → スケールピラミッド → FAST-9 コーナー検出 → 向き推定
           → rBRIEF(ORB) 記述子 → 特徴点バンク（マルチスケール）
 
-[ランタイム] 毎フレーム
-  カメラ映像 → 縮小グレースケール(360px)
+[Worker / WASM] フレーム処理（メインスレッドから転送された縮小グレースケール）
   ├─ SEARCHING: FAST + ORB → ハミング距離マッチング(cross-check + ratio test)
   │             → RANSAC ホモグラフィ → 妥当性検査 → TRACKING へ
-  └─ TRACKING:  ピラミッド Lucas-Kanade で特徴点を追跡
-                → forward-backward チェック → RANSAC で H を再推定
+  └─ TRACKING:  ピラミッド Lucas-Kanade（等速運動予測でウォームスタート）
+                → forward-backward チェック → 事前値ゲート付き決定論的フィット
                 → フォトメトリック検証（NCC）で見た目の整合を毎フレーム確認
                 → 点が減ったらモデルから再投影で補充、破綻したら SEARCHING へ
-  → H を分解して 6DoF ポーズ (H = K [r1 r2 t])
-  → One-Euro フィルタ + quaternion slerp で平滑化
-  → Three.js でビデオ背景に重ねて描画
+  → H を分解して 6DoF ポーズ (H = K [r1 r2 t]) をキャプチャ時刻付きで返送
+
+[メインスレッド] 毎 vsync (60fps)
+  → 直近 2 サンプルの等速外挿で「描画時刻のポーズ」を予測
+  → One-Euro（位置）+ 角速度適応平滑化（回転）
+  → Three.js でライブカメラ映像に重ねて描画
 ```
+
+## Web Worker + WASM
+
+- CV カーネル（リサイズ / FAST / ORB 記述子 / ハミングマッチング / LK
+  オプティカルフロー）は **AssemblyScript**（`assembly/index.ts`）で WASM 化。
+  純 TS 実装（`src/core/`）と数値的に一致することをパリティテストで保証し、
+  WASM が使えない環境では自動で TS 実装にフォールバックします。
+- Node ベンチマーク（360x270）: 検出+記述子 33.7ms → **16.2ms**、
+  LK 追跡（80 点 × 往復）7.5ms → **3.4ms**（約 2.1 倍）。
+- トラッキングは Worker で非同期実行（in-flight 1 フレーム、バッファは
+  Transferable を往復再利用）。メインスレッドはポーズを描画時刻へ外挿する
+  ため、処理レートに関係なく 60fps で滑らかに追従します。
+- ビルド: `npm run asbuild`（`asc` は純 JS コンパイラ）が
+  `public/tracker.wasm` を生成し、dev / build / test の各スクリプトが
+  自動実行します。
 
 ## 実装したアルゴリズム（すべてスクラッチ）
 
@@ -54,7 +72,12 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
 | `src/core/imageops.ts` | グレースケール変換、バイリニアリサイズ、積分画像、スケールピラミッド |
 | `src/tracker/target.ts` | ターゲットコンパイル（マルチスケール特徴点バンク生成） |
 | `src/tracker/tracker.ts` | detect/track ステートマシン、FB チェック、点の補充、H の妥当性検査、NCC によるフォトメトリック検証 |
-| `src/render/renderer.ts` | Three.js オーバーレイ（ピンホール内部パラメータと一致した射影、cover-fit レイアウト、ポーズ平滑化）。背景はライブ `<video>` ではなく**ポーズ計算に使ったフレームそのもの**を canvas に描画し、動き中のずれを防止 |
+| `src/tracker/worker.ts` | トラッキング Worker（WASM カーネル優先、TS フォールバック） |
+| `src/core/kernels.ts` | CV カーネルの抽象化（TS 実装 = リファレンス） |
+| `assembly/index.ts` | AssemblyScript 製 WASM カーネル（TS 実装と数値一致） |
+| `src/wasm/engine.ts` | WASM メモリレイアウト管理とカーネルラッパー |
+| `src/core/predictor.ts` | 等速外挿によるポーズ予測（描画時刻への補間） |
+| `src/render/renderer.ts` | Three.js オーバーレイ（ピンホール内部パラメータと一致した射影、cover-fit レイアウト、速度適応ポーズ平滑化） |
 
 外部依存はレンダリング用の **Three.js のみ**。トラッキングは全て自前実装です。
 
@@ -79,9 +102,9 @@ npm run typecheck
 
 ## 制限と今後の拡張
 
-- **シングルスレッド**: 検出は数十 ms かかるため探索中は fps が落ちる。Web Worker（+ WASM/SIMD）化が次の一手
 - **単一ターゲット**: 複数ターゲット対応はバンクを分けてマッチングを分岐すれば可能
 - **カメラキャリブレーション**: 固定 FOV 仮定。WebXR Camera API や事前キャリブレーションで精度向上
+- **WASM SIMD**: 現状はスカラー WASM。`i8x16.popcnt` 等の v128 化でマッチング・LK をさらに高速化できる
 - 照明変化には ORB のバイナリテストである程度強いが、強い鏡面反射・モーションブラーには弱い
 
 ## プロジェクト構成

@@ -1,10 +1,9 @@
 /**
- * Three.js overlay renderer. The camera background is a canvas that the app
- * fills with the exact frame each pose was computed from (not the live
- * <video>, which would run ahead of the tracker and make content appear to
- * lag). A transparent WebGL canvas is layered on top with a camera whose
- * projection matches the tracker's pinhole intrinsics, so posed 3D content
- * lines up with the tracked image.
+ * Three.js overlay renderer. The camera background is the live <video>
+ * element rendered at display rate; alignment with the (slightly older)
+ * tracker output is restored by extrapolating poses to the render timestamp
+ * (see core/predictor.ts). A transparent WebGL canvas is layered on top with
+ * a camera whose projection matches the tracker's pinhole intrinsics.
  */
 
 import * as THREE from 'three';
@@ -34,7 +33,7 @@ export class ARRenderer {
 
   constructor(
     private container: HTMLElement,
-    private bgCanvas: HTMLCanvasElement,
+    private video: HTMLVideoElement,
     canvas: HTMLCanvasElement,
     private debugCanvas: HTMLCanvasElement
   ) {
@@ -98,8 +97,6 @@ export class ARRenderer {
   setVideoSize(width: number, height: number): void {
     this.videoWidth = width;
     this.videoHeight = height;
-    this.bgCanvas.width = width;
-    this.bgCanvas.height = height;
     this.layout();
   }
 
@@ -173,7 +170,7 @@ export class ARRenderer {
     return this.debugCanvas.getContext('2d')!;
   }
 
-  /** Cover-fit the background, WebGL canvas and debug canvas to the container. */
+  /** Cover-fit the video, WebGL canvas and debug canvas to the container. */
   layout(): void {
     const cw = this.container.clientWidth;
     const ch = this.container.clientHeight;
@@ -183,7 +180,7 @@ export class ARRenderer {
     const h = this.videoHeight * scale;
     const left = (cw - w) / 2;
     const top = (ch - h) / 2;
-    for (const el of [this.bgCanvas, this.renderer.domElement, this.debugCanvas]) {
+    for (const el of [this.video, this.renderer.domElement, this.debugCanvas]) {
       el.style.position = 'absolute';
       el.style.left = `${left}px`;
       el.style.top = `${top}px`;

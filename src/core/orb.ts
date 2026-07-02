@@ -53,6 +53,11 @@ function buildPattern(): Int8Array {
 
 const PATTERN = buildPattern();
 
+/** The shared test-pair pattern, exposed so the WASM engine can upload it. */
+export function getPattern(): Int8Array {
+  return PATTERN;
+}
+
 /**
  * Compute descriptors for keypoints (which must lie at least PATCH_BORDER away
  * from image edges). Returns a flat Uint32Array of 8 words per keypoint.

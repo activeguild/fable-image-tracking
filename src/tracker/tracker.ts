@@ -10,10 +10,10 @@
  *   they decay. Much cheaper and much more stable than re-detecting.
  */
 
-import { buildPyramid, sampleBilinear, type PyramidLevel } from '../core/imageops';
-import { computeOrientation, detectFast, selectSpread } from '../core/fast';
-import { computeDescriptors, PATCH_BORDER } from '../core/orb';
-import { matchDescriptors } from '../core/matcher';
+import { sampleBilinear, type PyramidLevel } from '../core/imageops';
+import { selectSpread } from '../core/fast';
+import { PATCH_BORDER } from '../core/orb';
+import { jsKernels, type CVKernels } from '../core/kernels';
 import { ransacHomography, projectCorners, type RansacResult } from '../core/ransac';
 import {
   applyHomography,
@@ -25,7 +25,6 @@ import {
   type Point2,
 } from '../core/homography';
 import { poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
-import { trackPyrLK } from '../core/opticalflow';
 import type { CompiledTarget } from './target';
 
 export type TrackerState = 'searching' | 'tracking';
@@ -60,6 +59,8 @@ export interface TrackerOptions {
   /** Minimum photometric correlation (NCC) to keep tracking. */
   minTrackNCC?: number;
   intrinsics?: CameraIntrinsics;
+  /** Compute backend; defaults to the pure-TypeScript kernels. */
+  kernels?: CVKernels;
 }
 
 export class ImageTracker {
@@ -68,7 +69,8 @@ export class ImageTracker {
   readonly intrinsics: CameraIntrinsics;
 
   private readonly target: CompiledTarget;
-  private readonly opts: Required<Omit<TrackerOptions, 'intrinsics'>>;
+  private readonly kernels: CVKernels;
+  private readonly opts: Required<Omit<TrackerOptions, 'intrinsics' | 'kernels'>>;
 
   private state: TrackerState = 'searching';
   private prevPyramid: PyramidLevel[] | null = null;
@@ -83,6 +85,7 @@ export class ImageTracker {
     this.target = target;
     this.width = frameWidth;
     this.height = frameHeight;
+    this.kernels = options.kernels ?? jsKernels;
     this.opts = {
       fastThreshold: options.fastThreshold ?? 20,
       maxFrameFeatures: options.maxFrameFeatures ?? 500,
@@ -102,7 +105,7 @@ export class ImageTracker {
   /** Process one grayscale frame at the tracker's processing resolution. */
   processFrame(gray: Uint8Array): TrackerResult {
     this.frameCounter++;
-    const pyramid = buildPyramid(gray, this.width, this.height, this.opts.framePyramidLevels);
+    const pyramid = this.kernels.buildPyramid(gray, this.width, this.height, this.opts.framePyramidLevels);
 
     if (this.state === 'tracking' && this.prevPyramid) {
       this.trackStep(pyramid);
@@ -131,10 +134,9 @@ export class ImageTracker {
   private detectStep(pyramid: PyramidLevel[]): void {
     const framePts: number[] = [];
     const descChunks: Uint32Array[] = [];
-    const perLevelCounts: number[] = [];
 
     for (const level of pyramid) {
-      let kps = detectFast(level.data, level.width, level.height, this.opts.fastThreshold, PATCH_BORDER);
+      let kps = this.kernels.detectFast(level, this.opts.fastThreshold, PATCH_BORDER);
       kps = selectSpread(
         kps,
         level.width,
@@ -142,11 +144,7 @@ export class ImageTracker {
         Math.ceil(this.opts.maxFrameFeatures / pyramid.length)
       );
       if (kps.length === 0) continue;
-      for (const kp of kps) {
-        kp.angle = computeOrientation(level.data, level.width, level.height, kp.x, kp.y);
-      }
-      descChunks.push(computeDescriptors(level.data, level.width, level.height, kps));
-      perLevelCounts.push(kps.length);
+      descChunks.push(this.kernels.orientAndDescribe(level, kps));
       for (const kp of kps) framePts.push(kp.x * level.scale, kp.y * level.scale);
     }
 
@@ -154,7 +152,7 @@ export class ImageTracker {
     if (total < this.opts.minMatches) return;
 
     const frameDescriptors = concatUint32(descChunks);
-    const matches = matchDescriptors(this.target.descriptors, frameDescriptors, {
+    const matches = this.kernels.matchDescriptors(this.target.descriptors, frameDescriptors, {
       maxDistance: 64,
       ratio: 0.85,
       crossCheck: true,
@@ -207,7 +205,7 @@ export class ImageTracker {
       }
     }
 
-    const flows = trackPyrLK(this.prevPyramid!, pyramid, this.framePoints, {
+    const flows = this.kernels.trackPyrLK(this.prevPyramid!, pyramid, this.framePoints, {
       windowRadius: 4,
       maxIterations: 12,
       maxError: 24,
@@ -225,7 +223,7 @@ export class ImageTracker {
     }
     // The backward pass must undo the same (possibly large) motion, so give
     // it the original positions as its warm start.
-    const backFlows = trackPyrLK(pyramid, this.prevPyramid!, forwardPts, {
+    const backFlows = this.kernels.trackPyrLK(pyramid, this.prevPyramid!, forwardPts, {
       windowRadius: 4,
       maxIterations: 8,
       maxError: 32,

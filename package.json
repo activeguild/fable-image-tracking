@@ -5,9 +5,11 @@
   "type": "module",
   "description": "8th Wall-like markerless image tracking (natural feature tracking) built from scratch in TypeScript",
   "scripts": {
-    "dev": "vite --host",
-    "build": "tsc --noEmit && vite build",
+    "asbuild": "asc assembly/index.ts --outFile public/tracker.wasm -O3 --runtime stub --initialMemory 256 --maximumMemory 256",
+    "dev": "npm run asbuild && vite --host",
+    "build": "npm run asbuild && tsc --noEmit && vite build",
     "preview": "vite preview --host",
+    "pretest": "npm run asbuild",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -19,6 +21,7 @@
     "@types/node": "^26.1.0",
     "@types/three": "^0.166.0",
     "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "assemblyscript": "^0.28.19",
     "typescript": "^5.5.4",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"

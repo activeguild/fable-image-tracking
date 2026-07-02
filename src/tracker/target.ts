@@ -5,9 +5,9 @@
  * feature tracking (what 8th Wall / Vuforia call "image target compilation").
  */
 
-import { buildPyramid } from '../core/imageops';
-import { computeOrientation, detectFast, selectSpread, type Keypoint } from '../core/fast';
-import { computeDescriptors, DESCRIPTOR_WORDS, PATCH_BORDER } from '../core/orb';
+import { selectSpread, type Keypoint } from '../core/fast';
+import { DESCRIPTOR_WORDS, PATCH_BORDER } from '../core/orb';
+import { jsKernels, type CVKernels } from '../core/kernels';
 import type { Mat3 } from '../core/homography';
 
 export interface CompiledTarget {
@@ -32,6 +32,8 @@ export interface CompileOptions {
   pyramidLevels?: number;
   fastThreshold?: number;
   maxFeaturesPerLevel?: number;
+  /** Compute backend; must match the one used at runtime for best matching. */
+  kernels?: CVKernels;
 }
 
 /**
@@ -49,21 +51,19 @@ export function compileTarget(
     pyramidLevels = 5,
     fastThreshold = 20,
     maxFeaturesPerLevel = 200,
+    kernels = jsKernels,
   } = options;
 
-  const pyramid = buildPyramid(gray, width, height, pyramidLevels);
+  const pyramid = kernels.buildPyramid(gray, width, height, pyramidLevels);
   const allPoints: number[] = [];
   const allKeypoints: Keypoint[] = [];
   const descriptorChunks: Uint32Array[] = [];
 
   for (const level of pyramid) {
-    let kps = detectFast(level.data, level.width, level.height, fastThreshold, PATCH_BORDER);
+    let kps = kernels.detectFast(level, fastThreshold, PATCH_BORDER);
     kps = selectSpread(kps, level.width, level.height, maxFeaturesPerLevel);
     if (kps.length === 0) continue;
-    for (const kp of kps) {
-      kp.angle = computeOrientation(level.data, level.width, level.height, kp.x, kp.y);
-    }
-    descriptorChunks.push(computeDescriptors(level.data, level.width, level.height, kps));
+    descriptorChunks.push(kernels.orientAndDescribe(level, kps));
     for (const kp of kps) {
       allPoints.push(kp.x * level.scale, kp.y * level.scale);
       allKeypoints.push(kp);
