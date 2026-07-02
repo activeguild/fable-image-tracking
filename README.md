@@ -15,7 +15,7 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
 
 任意の画像をターゲットにすることもできます（スタート画面のファイル選択から。模様が複雑で非対称な画像ほど安定します）。
 
-> **Note:** スマホ実機では getUserMedia のために HTTPS が必要です。`vite dev` を LAN で使う場合は `mkcert` 等で証明書を用意するか、トンネル（`cloudflared` など）経由でアクセスしてください。
+> **Note:** getUserMedia は secure context が必要なため、開発サーバは [`@vitejs/plugin-basic-ssl`](https://github.com/vitejs/vite-plugin-basic-ssl) による自己署名 HTTPS で起動します（`https://<PCのIP>:5173` にスマホからアクセス）。自己署名証明書の警告は「詳細設定 → アクセスする」で進んでください。
 
 ## パイプライン全体像
 
