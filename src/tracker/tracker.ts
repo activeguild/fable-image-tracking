@@ -104,6 +104,8 @@ export class ImageTracker {
   // (they are weakly coupled and would otherwise co-drift).
   private focalStreak = 0;
   private k1Streak = 0;
+  /** FAST threshold auto-tuned to scene contrast (drops in dim scenes). */
+  private fastThreshold: number;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -125,6 +127,7 @@ export class ImageTracker {
     };
     this.intrinsics = options.intrinsics ?? defaultIntrinsics(frameWidth, frameHeight);
     this.initialFocal = this.intrinsics.fx;
+    this.fastThreshold = this.opts.fastThreshold;
     this.aligner = new DenseAligner(target.gray, target.width, target.height);
     this.probePoints = [];
     const stride = Math.max(1, Math.floor(target.points.length / 2 / 128));
@@ -193,7 +196,7 @@ export class ImageTracker {
     const descChunks: Uint32Array[] = [];
 
     for (const level of pyramid) {
-      let kps = this.kernels.detectFast(level, this.opts.fastThreshold, PATCH_BORDER);
+      let kps = this.kernels.detectFast(level, this.fastThreshold, PATCH_BORDER);
       kps = selectSpread(
         kps,
         level.width,
@@ -205,7 +208,12 @@ export class ImageTracker {
       for (const kp of kps) framePts.push(kp.x * level.scale, kp.y * level.scale);
     }
 
+    // Auto-tune the detector to scene contrast: dim scenes starve a fixed
+    // threshold of corners (noisy 15-point fits), bright ones flood it.
     const total = framePts.length / 2;
+    if (total < 150) this.fastThreshold = Math.max(8, this.fastThreshold - 2);
+    else if (total > 450) this.fastThreshold = Math.min(30, this.fastThreshold + 2);
+
     if (total < this.opts.minMatches) return;
 
     const frameDescriptors = concatUint32(descChunks);

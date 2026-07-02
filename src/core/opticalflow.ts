@@ -41,6 +41,7 @@ export function trackPyrLK(
   const gradX = new Float32Array(winArea);
   const gradY = new Float32Array(winArea);
   const template = new Float32Array(winArea);
+  const current = new Float32Array(winArea);
 
   return points.map((p, i) => trackPoint(p, initialGuess?.[i]));
 
@@ -74,12 +75,15 @@ export function trackPyrLK(
         let sxx = 0;
         let sxy = 0;
         let syy = 0;
+        let meanT = 0;
         let idx = 0;
         for (let dy = -windowRadius; dy <= windowRadius; dy++) {
           for (let dx = -windowRadius; dx <= windowRadius; dx++, idx++) {
             const x = px + dx;
             const y = py + dy;
-            template[idx] = sampleBilinear(prev.data, prev.width, prev.height, x, y);
+            const tv = sampleBilinear(prev.data, prev.width, prev.height, x, y);
+            template[idx] = tv;
+            meanT += tv;
             const gxv =
               (sampleBilinear(prev.data, prev.width, prev.height, x + 1, y) -
                 sampleBilinear(prev.data, prev.width, prev.height, x - 1, y)) * 0.5;
@@ -93,6 +97,7 @@ export function trackPyrLK(
             syy += gyv * gyv;
           }
         }
+        meanT /= winArea;
 
         const det = sxx * syy - sxy * sxy;
         if (det >= 1e-4) {
@@ -106,19 +111,27 @@ export function trackPyrLK(
             ) {
               break;
             }
-            let bx = 0;
-            let by = 0;
-            let absSum = 0;
+            // Zero-mean matching: subtracting the window means makes the
+            // tracker invariant to exposure/illumination changes between
+            // frames (auto-exposure hunts constantly in low light).
+            let meanI = 0;
             idx = 0;
             for (let dy = -windowRadius; dy <= windowRadius; dy++) {
               for (let dx = -windowRadius; dx <= windowRadius; dx++, idx++) {
-                const dI =
-                  sampleBilinear(next.data, next.width, next.height, qx + dx, qy + dy) -
-                  template[idx];
-                bx += dI * gradX[idx];
-                by += dI * gradY[idx];
-                absSum += Math.abs(dI);
+                const cv = sampleBilinear(next.data, next.width, next.height, qx + dx, qy + dy);
+                current[idx] = cv;
+                meanI += cv;
               }
+            }
+            meanI /= winArea;
+            let bx = 0;
+            let by = 0;
+            let absSum = 0;
+            for (idx = 0; idx < winArea; idx++) {
+              const dI = (current[idx] - meanI) - (template[idx] - meanT);
+              bx += dI * gradX[idx];
+              by += dI * gradY[idx];
+              absSum += Math.abs(dI);
             }
             err = absSum / winArea;
             // Solve G d = -b for the incremental flow d.

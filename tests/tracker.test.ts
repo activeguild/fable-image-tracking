@@ -166,6 +166,26 @@ describe('ImageTracker end-to-end', () => {
     expect(absent).toBeLessThan(0.4);
   });
 
+  it('adapts the FAST threshold to detect in low-contrast scenes', () => {
+    const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
+    const H = similarity(0.6, 0.1, 180, 135);
+    const bright = renderFrame(targetImg, H);
+    // Crush the contrast: the default threshold (20) finds almost nothing.
+    const dim = new Uint8Array(bright.length);
+    for (let i = 0; i < bright.length; i++) dim[i] = 60 + (bright[i] * 0.22) | 0;
+
+    let acquiredAt = -1;
+    for (let f = 0; f < 12; f++) {
+      const r = tracker.processFrame(dim);
+      if (r.state === 'tracking') {
+        acquiredAt = f;
+        break;
+      }
+    }
+    // The threshold ratchets down a step per frame until corners reappear.
+    expect(acquiredAt).toBeGreaterThanOrEqual(0);
+  });
+
   it('reports searching when the target is absent', () => {
     const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
     const empty = randomTexture(FRAME_W, FRAME_H, 500, 7);
