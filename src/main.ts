@@ -28,7 +28,6 @@ const startButton = document.getElementById('start-button') as HTMLButtonElement
 const uploadInput = document.getElementById('target-upload') as HTMLInputElement;
 const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
 const contentSelect = document.getElementById('content-select') as HTMLSelectElement;
-const contentFile = document.getElementById('content-file') as HTMLInputElement;
 
 const worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
 const predictor = new PosePredictor();
@@ -153,6 +152,7 @@ function setupProcessing(): void {
   lastFx = K.fx;
   renderer.setIntrinsics(K, procW, procH);
   renderer.setDebugVisible(debugToggle.checked);
+  applyContent(contentSelect.value);
 }
 
 function captureAndSend(nowMs: number): void {
@@ -247,7 +247,7 @@ startButton.addEventListener('click', () => void start());
 
 let contentVideo: HTMLVideoElement | null = null;
 let contentVideoUrl: string | null = null;
-let lastContentValue = 'cube';
+let lastContentValue = 'image';
 
 function cleanupContentVideo(): void {
   if (contentVideo) {
@@ -263,82 +263,63 @@ function cleanupContentVideo(): void {
 
 debugToggle.addEventListener('change', () => renderer?.setDebugVisible(debugToggle.checked));
 
-function setVideoContent(src: string, objectUrl: string | null, selectValue: string): void {
-  cleanupContentVideo();
-  const vid = document.createElement('video');
-  vid.loop = true;
-  vid.muted = true;
-  vid.playsInline = true;
-  vid.addEventListener(
-    'loadeddata',
-    () => {
-      renderer?.setContent({ type: 'video', source: vid });
-      lastContentValue = selectValue;
-    },
-    { once: true }
-  );
-  vid.addEventListener('error', () => {
+/**
+ * Play the bundled sample video. It is fetched as a Blob first: iOS Safari
+ * requires HTTP Range support to stream <video> sources, which dev/static
+ * servers often lack - a blob: URL sidesteps that entirely.
+ */
+async function setSampleVideoContent(): Promise<void> {
+  try {
+    const response = await fetch(sampleVideoUrl());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const url = URL.createObjectURL(await response.blob());
     cleanupContentVideo();
+    const vid = document.createElement('video');
+    vid.loop = true;
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.addEventListener(
+      'loadeddata',
+      () => {
+        renderer?.setContent({ type: 'video', source: vid });
+        lastContentValue = 'video';
+        void vid.play();
+      },
+      { once: true }
+    );
+    vid.addEventListener('error', () => {
+      cleanupContentVideo();
+      contentSelect.value = lastContentValue;
+      alert('動画を読み込めませんでした');
+    });
+    vid.src = url;
+    contentVideo = vid;
+    contentVideoUrl = url;
+    void vid.play();
+  } catch {
     contentSelect.value = lastContentValue;
     alert('動画を読み込めませんでした');
-  });
-  vid.src = src;
-  contentVideo = vid;
-  contentVideoUrl = objectUrl;
-  void vid.play();
+  }
 }
 
-contentSelect.addEventListener('change', () => {
-  switch (contentSelect.value) {
+function applyContent(value: string): void {
+  switch (value) {
+    case 'video':
+      void setSampleVideoContent();
+      break;
     case 'cube':
       cleanupContentVideo();
       renderer?.setContent({ type: 'cube' });
       lastContentValue = 'cube';
       break;
-    case 'image': // built-in sample image
+    default: // image
       cleanupContentVideo();
       renderer?.setContent({ type: 'image', source: createSampleImageCanvas() });
       lastContentValue = 'image';
-      break;
-    case 'video': // bundled sample video
-      setVideoContent(sampleVideoUrl(), null, 'video');
-      break;
-    default: // image-file / video-file: pick from the device
-      contentFile.accept = contentSelect.value === 'image-file' ? 'image/*' : 'video/*';
-      contentFile.value = '';
-      contentFile.click();
   }
-});
+}
 
-contentFile.addEventListener('cancel', () => {
-  contentSelect.value = lastContentValue;
-});
-
-contentFile.addEventListener('change', () => {
-  const file = contentFile.files?.[0];
-  if (!file) {
-    contentSelect.value = lastContentValue;
-    return;
-  }
-  const url = URL.createObjectURL(file);
-  if (contentSelect.value === 'image-file') {
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      cleanupContentVideo();
-      renderer?.setContent({ type: 'image', source: img });
-      lastContentValue = 'image-file';
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      contentSelect.value = lastContentValue;
-      alert('画像を読み込めませんでした');
-    };
-    img.src = url;
-  } else {
-    setVideoContent(url, url, 'video-file');
-  }
-});
+contentSelect.addEventListener('change', () => applyContent(contentSelect.value));
 
 uploadInput.addEventListener('change', () => {
   const file = uploadInput.files?.[0];
