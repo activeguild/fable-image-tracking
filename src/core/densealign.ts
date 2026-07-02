@@ -6,11 +6,21 @@
  * estimate down to subpixel accuracy. Point-based estimates carry the noise
  * of individual corners; dense alignment averages over the whole texture.
  *
- * Inverse compositional: Jacobians and the Gauss-Newton Hessian live on the
- * fixed template, so everything expensive is precomputed once at target
- * compile time. Each frame iteration only samples the camera image and
- * accumulates an 8-vector. Gain/bias lighting changes are handled by
+ * Robustness: residuals are reweighted with a Huber M-estimator (IRLS) each
+ * iteration, so partial occlusion (a hand over a corner of the target) or
+ * specular highlights cannot drag the estimate - outliers saturate instead
+ * of contributing quadratically. Gain/bias lighting changes are handled by
  * normalising both sides to the template's statistics.
+ *
+ * Inverse compositional: Jacobians live on the fixed template, so the
+ * expensive parts (gradients, per-point Jacobians) are precomputed once at
+ * target compile time. Each frame iteration samples the camera image,
+ * reweights, and solves one 8x8 system.
+ *
+ * An optional radial distortion model (k1, division-free Brown model) can be
+ * applied on the sampling side, so the homography stays defined in ideal
+ * (undistorted) pixel coordinates while samples are read from the real,
+ * distorted camera image.
  */
 
 import { invert3, matMul3, solveLinearSystem, type Mat3 } from './homography';
@@ -22,8 +32,57 @@ export interface DenseAlignOptions {
   /** Maximum number of high-gradient sample points. */
   maxPoints?: number;
   maxIterations?: number;
-  /** Stop when the mean absolute residual improves less than this factor. */
+  /** Stop when the robust residual improves less than this factor. */
   minImprovement?: number;
+}
+
+/** Radial lens distortion (Brown, k1 only), in normalized camera units. */
+export interface RadialDistortion {
+  k1: number;
+  cx: number;
+  cy: number;
+  /** Focal length in the same pixel units as cx/cy. */
+  f: number;
+}
+
+export interface AlignResult {
+  H: Mat3;
+  /** Robust mean absolute residual (intensity units) at the solution. */
+  err: number;
+}
+
+/** Ideal (undistorted) pixel -> observed (distorted) pixel. */
+export function distortPoint(
+  d: RadialDistortion,
+  x: number,
+  y: number,
+  out: { x: number; y: number }
+): void {
+  const nx = (x - d.cx) / d.f;
+  const ny = (y - d.cy) / d.f;
+  const s = 1 + d.k1 * (nx * nx + ny * ny);
+  out.x = d.cx + nx * s * d.f;
+  out.y = d.cy + ny * s * d.f;
+}
+
+/** Observed (distorted) pixel -> ideal (undistorted) pixel (fixed-point). */
+export function undistortPoint(
+  d: RadialDistortion,
+  x: number,
+  y: number,
+  out: { x: number; y: number }
+): void {
+  const dx = (x - d.cx) / d.f;
+  const dy = (y - d.cy) / d.f;
+  let nx = dx;
+  let ny = dy;
+  for (let i = 0; i < 4; i++) {
+    const s = 1 + d.k1 * (nx * nx + ny * ny);
+    nx = dx / s;
+    ny = dy / s;
+  }
+  out.x = d.cx + nx * d.f;
+  out.y = d.cy + ny * d.f;
 }
 
 export class DenseAligner {
@@ -35,7 +94,6 @@ export class DenseAligner {
   private readonly py: Float32Array;
   private readonly tVal: Float32Array; // template intensities at samples
   private readonly J: Float32Array; // 8 Jacobian entries per sample
-  private readonly hessInv: Float64Array; // 8x8
   private readonly meanT: number;
   private readonly stdT: number;
   private readonly maxIterations: number;
@@ -112,39 +170,21 @@ export class DenseAligner {
     for (let i = 0; i < n; i++) varT += (this.tVal[i] - meanT) ** 2;
     this.meanT = meanT;
     this.stdT = Math.sqrt(varT / Math.max(1, n)) || 1;
-
-    // Gauss-Newton Hessian (J^T J) and its inverse, both fixed for the template.
-    const H = new Float64Array(64);
-    for (let i = 0; i < n; i++) {
-      const base = i * 8;
-      for (let r = 0; r < 8; r++) {
-        const jr = this.J[base + r];
-        if (jr === 0) continue;
-        for (let c = r; c < 8; c++) H[r * 8 + c] += jr * this.J[base + c];
-      }
-    }
-    for (let r = 0; r < 8; r++) for (let c = 0; c < r; c++) H[r * 8 + c] = H[c * 8 + r];
-    const inv = new Float64Array(64);
-    let ok = this.valid;
-    for (let col = 0; col < 8 && ok; col++) {
-      const e = new Float64Array(8);
-      e[col] = 1;
-      const x = solveLinearSystem(H, e, 8);
-      if (!x) {
-        ok = false;
-        break;
-      }
-      for (let r = 0; r < 8; r++) inv[r * 8 + col] = x[r];
-    }
-    this.hessInv = inv;
-    this.valid = ok;
   }
 
   /**
-   * Refine `H` (reference-target px -> frame px) against the frame. Returns
-   * the refined homography, or null when alignment is unreliable.
+   * Refine `H` (reference-target px -> ideal frame px) against the frame.
+   * When `distortion` is given, samples are read through the radial model
+   * (the image is distorted; H stays ideal). Returns null when alignment is
+   * unreliable.
    */
-  align(H: Mat3, frame: Uint8Array, frameW: number, frameH: number): Mat3 | null {
+  align(
+    H: Mat3,
+    frame: Uint8Array,
+    frameW: number,
+    frameH: number,
+    distortion?: RadialDistortion
+  ): AlignResult | null {
     if (!this.valid) return null;
     const s = this.tmplToTarget;
     const S: Mat3 = [s, 0, 0, 0, s, 0, 0, 0, 1];
@@ -153,7 +193,11 @@ export class DenseAligner {
 
     const n = this.px.length;
     const fVal = new Float32Array(n);
+    const resid = new Float32Array(n);
     const validMask = new Uint8Array(n);
+    const absResid = new Float32Array(n);
+    const dpt = { x: 0, y: 0 };
+    const useDist = distortion !== undefined && distortion.k1 !== 0;
     let bestErr = Infinity;
     let bestHt = Ht;
 
@@ -169,8 +213,13 @@ export class DenseAligner {
           validMask[i] = 0;
           continue;
         }
-        const fx = (Ht[0] * u + Ht[1] * v + Ht[2]) / dw;
-        const fy = (Ht[3] * u + Ht[4] * v + Ht[5]) / dw;
+        let fx = (Ht[0] * u + Ht[1] * v + Ht[2]) / dw;
+        let fy = (Ht[3] * u + Ht[4] * v + Ht[5]) / dw;
+        if (useDist) {
+          distortPoint(distortion!, fx, fy, dpt);
+          fx = dpt.x;
+          fy = dpt.y;
+        }
         if (fx < 1 || fy < 1 || fx > frameW - 2 || fy > frameH - 2) {
           validMask[i] = 0;
           continue;
@@ -188,17 +237,41 @@ export class DenseAligner {
       const stdF = Math.sqrt(varF / count) || 1;
       const gain = this.stdT / stdF;
 
-      // Normalized residuals and the Gauss-Newton right-hand side.
-      const rhs = new Float64Array(8);
-      let errSum = 0;
+      // Normalized residuals + robust scale (MAD) for the Huber weights.
+      let m = 0;
       for (let i = 0; i < n; i++) {
         if (!validMask[i]) continue;
         const r = (fVal[i] - meanF) * gain - (this.tVal[i] - this.meanT);
-        errSum += Math.abs(r);
-        const base = i * 8;
-        for (let k = 0; k < 8; k++) rhs[k] += this.J[base + k] * r;
+        resid[i] = r;
+        absResid[m++] = Math.abs(r);
       }
-      const err = errSum / count;
+      const scale = medianOf(absResid, m) * 1.4826;
+      const delta = Math.max(4, 1.345 * scale); // intensity units; floor for clean scenes
+
+      // Weighted Gauss-Newton: accumulate Hessian and rhs with Huber weights.
+      const Hgn = new Float64Array(64);
+      const rhs = new Float64Array(8);
+      let errSum = 0;
+      let wSum = 0;
+      for (let i = 0; i < n; i++) {
+        if (!validMask[i]) continue;
+        const r = resid[i];
+        const a = Math.abs(r);
+        const wgt = a <= delta ? 1 : delta / a;
+        errSum += wgt * a;
+        wSum += wgt;
+        const base = i * 8;
+        for (let row = 0; row < 8; row++) {
+          const jr = this.J[base + row] * wgt;
+          if (jr === 0) continue;
+          rhs[row] += jr * r;
+          for (let col = row; col < 8; col++) Hgn[row * 8 + col] += jr * this.J[base + col];
+        }
+      }
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < row; col++) Hgn[row * 8 + col] = Hgn[col * 8 + row];
+      }
+      const err = errSum / Math.max(1e-9, wSum);
       if (err < bestErr) {
         const improvement = iter > 0 ? (bestErr - err) / bestErr : 1;
         bestErr = err;
@@ -208,14 +281,10 @@ export class DenseAligner {
         break; // diverging: keep the best seen
       }
 
-      // Inverse compositional: delta = Hinv * (J^T r) with r = I - T, then
-      // compose the *inverse* of the incremental warp: Ht <- Ht * dH^-1.
-      const d = new Float64Array(8);
-      for (let r = 0; r < 8; r++) {
-        let acc = 0;
-        for (let c = 0; c < 8; c++) acc += this.hessInv[r * 8 + c] * rhs[c];
-        d[r] = acc;
-      }
+      // Inverse compositional: delta = Hgn^-1 * (J^T W r) with r = I - T,
+      // then compose the *inverse* of the incremental warp: Ht <- Ht * dH^-1.
+      const d = solveLinearSystem(Hgn, rhs, 8);
+      if (!d) break;
       const dH: Mat3 = [1 + d[0], d[2], d[4], d[1], 1 + d[3], d[5], d[6], d[7], 1];
       const dHinv = invert3(dH);
       if (!dHinv) break;
@@ -238,6 +307,14 @@ export class DenseAligner {
     if (Math.abs(refined[8]) < 1e-12) return null;
     const invW = 1 / refined[8];
     for (let k = 0; k < 9; k++) refined[k] *= invW;
-    return refined;
+    return { H: refined, err: bestErr };
   }
+}
+
+/** Median of the first `m` entries (partial sort on a copy). */
+function medianOf(values: Float32Array, m: number): number {
+  if (m === 0) return 0;
+  const copy = Array.from(values.subarray(0, m));
+  copy.sort((a, b) => a - b);
+  return copy[m >> 1];
 }

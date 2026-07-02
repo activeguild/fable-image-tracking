@@ -194,7 +194,7 @@ export class ImageTracker {
 
     // Subpixel dense refinement against the reference texture.
     const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
-    if (refined && this.isPlausible(refined)) result.H = refined;
+    if (refined && this.isPlausible(refined.H)) result.H = refined.H;
 
     this.H = result.H;
     this.prevH = null; // fresh acquisition: no velocity estimate yet
@@ -294,7 +294,7 @@ export class ImageTracker {
     // noise; aligning the whole reference texture against the frame removes
     // the residual sub-pixel swimming.
     const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
-    if (refined && this.isPlausible(refined)) result.H = refined;
+    if (refined && this.isPlausible(refined.H)) result.H = refined.H;
 
     this.prevH = this.H;
     this.H = result.H;
@@ -314,12 +314,12 @@ export class ImageTracker {
   private denseRescue(prior: Mat3 | null, pyramid: PyramidLevel[]): boolean {
     if (!prior) return false;
     const refined = this.aligner.align(prior, pyramid[0].data, this.width, this.height);
-    if (!refined || !this.isPlausible(refined)) return false;
-    const ncc = appearanceNCC(this.target, this.probePoints, refined, pyramid[0]);
+    if (!refined || !this.isPlausible(refined.H)) return false;
+    const ncc = appearanceNCC(this.target, this.probePoints, refined.H, pyramid[0]);
     if (ncc < this.opts.minTrackNCC) return false;
 
     this.prevH = this.H;
-    this.H = refined;
+    this.H = refined.H;
     // Re-seed the point set from the model so LK can resume next frame.
     this.framePoints = [];
     this.modelPoints = [];

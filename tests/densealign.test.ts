@@ -66,7 +66,7 @@ describe('DenseAligner', () => {
 
     const refined = aligner.align(rough, frame, FRAME_W, FRAME_H)!;
     expect(refined).not.toBeNull();
-    expect(maxCornerError(refined, trueH)).toBeLessThan(0.5);
+    expect(maxCornerError(refined.H, trueH)).toBeLessThan(0.5);
   });
 
   it('is invariant to gain and bias lighting changes', () => {
@@ -75,7 +75,31 @@ describe('DenseAligner', () => {
     const rough = perturb(trueH, -1.5, 1.0, -0.01, 0.99);
     const refined = aligner.align(rough, darker, FRAME_W, FRAME_H)!;
     expect(refined).not.toBeNull();
-    expect(maxCornerError(refined, trueH)).toBeLessThan(0.6);
+    expect(maxCornerError(refined.H, trueH)).toBeLessThan(0.6);
+  });
+
+  it('stays accurate under partial occlusion (Huber weights)', () => {
+    const aligner = new DenseAligner(targetImg, TARGET, TARGET);
+    // Cover ~25% of the target (one quadrant) with unrelated noise.
+    const occluded = Uint8Array.from(frame);
+    const Hquad = trueH;
+    let seed = 12345;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    for (let y = 0; y < FRAME_H; y++) {
+      for (let x = 0; x < FRAME_W; x++) {
+        const p = applyHomography(invert3(Hquad)!, x, y);
+        if (p.x >= 0 && p.y >= 0 && p.x < TARGET / 2 && p.y < TARGET / 2) {
+          occluded[y * FRAME_W + x] = (rand() * 255) | 0;
+        }
+      }
+    }
+    const rough = perturb(trueH, 1.5, -1.0, 0.01, 1.01);
+    const refined = aligner.align(rough, occluded, FRAME_W, FRAME_H)!;
+    expect(refined).not.toBeNull();
+    expect(maxCornerError(refined.H, trueH)).toBeLessThan(1.0);
   });
 
   it('returns null when the target is mostly outside the frame', () => {
