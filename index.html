@@ -8,7 +8,9 @@
   </head>
   <body>
     <div id="ar-container">
+      <!-- Hidden: frames are copied to #bg-canvas in sync with tracking. -->
       <video id="camera" autoplay muted playsinline></video>
+      <canvas id="bg-canvas"></canvas>
       <canvas id="gl-canvas"></canvas>
       <canvas id="debug-canvas"></canvas>
     </div>

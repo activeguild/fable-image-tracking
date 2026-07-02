@@ -32,6 +32,7 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
   │             → RANSAC ホモグラフィ → 妥当性検査 → TRACKING へ
   └─ TRACKING:  ピラミッド Lucas-Kanade で特徴点を追跡
                 → forward-backward チェック → RANSAC で H を再推定
+                → フォトメトリック検証（NCC）で見た目の整合を毎フレーム確認
                 → 点が減ったらモデルから再投影で補充、破綻したら SEARCHING へ
   → H を分解して 6DoF ポーズ (H = K [r1 r2 t])
   → One-Euro フィルタ + quaternion slerp で平滑化
@@ -52,8 +53,8 @@ npm run dev   # --host 付きで起動するので同一ネットワークのス
 | `src/core/filter.ts` | One-Euro フィルタ（位置のジッタ除去） |
 | `src/core/imageops.ts` | グレースケール変換、バイリニアリサイズ、積分画像、スケールピラミッド |
 | `src/tracker/target.ts` | ターゲットコンパイル（マルチスケール特徴点バンク生成） |
-| `src/tracker/tracker.ts` | detect/track ステートマシン、FB チェック、点の補充、H の妥当性検査 |
-| `src/render/renderer.ts` | Three.js オーバーレイ（ピンホール内部パラメータと一致した射影、cover-fit レイアウト、ポーズ平滑化） |
+| `src/tracker/tracker.ts` | detect/track ステートマシン、FB チェック、点の補充、H の妥当性検査、NCC によるフォトメトリック検証 |
+| `src/render/renderer.ts` | Three.js オーバーレイ（ピンホール内部パラメータと一致した射影、cover-fit レイアウト、ポーズ平滑化）。背景はライブ `<video>` ではなく**ポーズ計算に使ったフレームそのもの**を canvas に描画し、動き中のずれを防止 |
 
 外部依存はレンダリング用の **Three.js のみ**。トラッキングは全て自前実装です。
 

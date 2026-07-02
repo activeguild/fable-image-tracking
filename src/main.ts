@@ -15,6 +15,7 @@ const TARGET_WIDTH_METERS = 0.2;
 
 const container = document.getElementById('ar-container') as HTMLDivElement;
 const video = document.getElementById('camera') as HTMLVideoElement;
+const bgCanvas = document.getElementById('bg-canvas') as HTMLCanvasElement;
 const glCanvas = document.getElementById('gl-canvas') as HTMLCanvasElement;
 const debugCanvas = document.getElementById('debug-canvas') as HTMLCanvasElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
@@ -29,6 +30,7 @@ let renderer: ARRenderer | null = null;
 
 let procCanvas: HTMLCanvasElement;
 let procCtx: CanvasRenderingContext2D;
+let bgCtx: CanvasRenderingContext2D;
 let grayBuffer: Uint8Array | undefined;
 let procW = 0;
 let procH = 0;
@@ -90,8 +92,9 @@ function setupProcessing(): void {
 
   tracker = new ImageTracker(compiledTarget!, procW, procH);
 
-  renderer = new ARRenderer(container, video, glCanvas, debugCanvas);
+  renderer = new ARRenderer(container, bgCanvas, glCanvas, debugCanvas);
   renderer.setVideoSize(vw, vh);
+  bgCtx = bgCanvas.getContext('2d')!;
   renderer.setIntrinsics(tracker.intrinsics, procW, procH);
   renderer.setTargetSize(compiledTarget!.widthMeters, compiledTarget!.heightMeters);
 }
@@ -130,6 +133,9 @@ function loop(now: number): void {
   const dt = lastFrameTime > 0 ? Math.min(0.1, timeSec - lastFrameTime) : 1 / 60;
   lastFrameTime = timeSec;
 
+  // Capture the frame once: the background canvas and the tracking input are
+  // the same instant, so the overlay never lags behind the visible image.
+  bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height);
   procCtx.drawImage(video, 0, 0, procW, procH);
   const rgba = procCtx.getImageData(0, 0, procW, procH).data;
   grayBuffer = rgbaToGray(rgba, procW, procH, grayBuffer);

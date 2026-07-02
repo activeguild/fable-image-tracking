@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { applyHomography, invert3, type Mat3 } from '../src/core/homography';
 import { sampleBilinear } from '../src/core/imageops';
 import { compileTarget } from '../src/tracker/target';
-import { ImageTracker } from '../src/tracker/tracker';
+import { appearanceNCC, ImageTracker } from '../src/tracker/tracker';
 import { randomTexture } from './helpers';
 
 const FRAME_W = 360;
@@ -87,6 +87,26 @@ describe('ImageTracker end-to-end', () => {
       expect(r.state).toBe('tracking');
       expect(maxCornerError(r.H!, H2)).toBeLessThan(5);
     }
+  });
+
+  it('scores appearance high for the true homography and low for a wrong one', () => {
+    const H = similarity(0.6, 0.2, 160, 120);
+    const frame = { data: renderFrame(targetImg, H), width: FRAME_W, height: FRAME_H };
+    const modelPoints = [];
+    for (let i = 0; i < compiled.points.length / 2; i += 3) {
+      modelPoints.push({ x: compiled.points[i * 2], y: compiled.points[i * 2 + 1] });
+    }
+
+    const good = appearanceNCC(compiled, modelPoints, H, frame);
+    expect(good).toBeGreaterThan(0.8);
+
+    const shifted = similarity(0.6, 0.2, 230, 180); // target is not actually there
+    const bad = appearanceNCC(compiled, modelPoints, shifted, frame);
+    expect(bad).toBeLessThan(0.5);
+
+    const noTarget = { data: randomTexture(FRAME_W, FRAME_H, 900, 7), width: FRAME_W, height: FRAME_H };
+    const absent = appearanceNCC(compiled, modelPoints, H, noTarget);
+    expect(absent).toBeLessThan(0.4);
   });
 
   it('reports searching when the target is absent', () => {

@@ -1,6 +1,8 @@
 /**
- * Three.js overlay renderer. The camera background is the raw <video>
- * element; a transparent WebGL canvas is layered on top with a camera whose
+ * Three.js overlay renderer. The camera background is a canvas that the app
+ * fills with the exact frame each pose was computed from (not the live
+ * <video>, which would run ahead of the tracker and make content appear to
+ * lag). A transparent WebGL canvas is layered on top with a camera whose
  * projection matches the tracker's pinhole intrinsics, so posed 3D content
  * lines up with the tracked image.
  */
@@ -16,18 +18,19 @@ export class ARRenderer {
   private anchor = new THREE.Group();
   private cube: THREE.Mesh;
 
-  private positionFilter = new Vector3Filter(1.2, 0.6, 1.0);
+  private positionFilter = new Vector3Filter(1.2, 1.2, 1.0);
   private smoothedQuat = new THREE.Quaternion();
   private hasPose = false;
-  private missingFrames = 999;
-  private readonly graceFrames = 10;
+  private lastPoseTime = -1;
+  /** Keep showing the last pose this long (seconds) to bridge 1-frame dropouts. */
+  private readonly graceSeconds = 0.12;
 
   private videoWidth = 1280;
   private videoHeight = 720;
 
   constructor(
     private container: HTMLElement,
-    private video: HTMLVideoElement,
+    private bgCanvas: HTMLCanvasElement,
     canvas: HTMLCanvasElement,
     private debugCanvas: HTMLCanvasElement
   ) {
@@ -91,6 +94,8 @@ export class ARRenderer {
   setVideoSize(width: number, height: number): void {
     this.videoWidth = width;
     this.videoHeight = height;
+    this.bgCanvas.width = width;
+    this.bgCanvas.height = height;
     this.layout();
   }
 
@@ -108,7 +113,7 @@ export class ARRenderer {
    */
   updatePose(pose: Pose | null, timeSec: number, spinDelta: number): void {
     if (pose) {
-      this.missingFrames = 0;
+      this.lastPoseTime = timeSec;
       const { R, t } = pose;
       // CV camera -> three.js camera: flip y and z (C = diag(1,-1,-1)).
       const m = new THREE.Matrix4().set(
@@ -128,9 +133,10 @@ export class ARRenderer {
         this.smoothedQuat.copy(quat);
         this.hasPose = true;
       } else {
+        // Adaptive slerp: heavy smoothing for jitter-sized changes, near
+        // pass-through for fast rotation so content does not trail behind.
         const angle = this.smoothedQuat.angleTo(quat);
-        // Snap on big jumps, smooth small jitter.
-        const alpha = angle > 0.35 ? 1 : 0.35;
+        const alpha = Math.min(1, 0.3 + angle * 2.5);
         this.smoothedQuat.slerp(quat, alpha);
       }
 
@@ -141,14 +147,11 @@ export class ARRenderer {
       );
       this.anchor.matrix.copy(sm);
       this.anchor.visible = true;
-    } else {
-      this.missingFrames++;
-      if (this.missingFrames > this.graceFrames) {
-        this.anchor.visible = false;
-        if (this.hasPose) {
-          this.positionFilter.reset();
-          this.hasPose = false;
-        }
+    } else if (this.lastPoseTime < 0 || timeSec - this.lastPoseTime > this.graceSeconds) {
+      this.anchor.visible = false;
+      if (this.hasPose) {
+        this.positionFilter.reset();
+        this.hasPose = false;
       }
     }
 
@@ -160,7 +163,7 @@ export class ARRenderer {
     return this.debugCanvas.getContext('2d')!;
   }
 
-  /** Cover-fit the video, WebGL canvas and debug canvas to the container. */
+  /** Cover-fit the background, WebGL canvas and debug canvas to the container. */
   layout(): void {
     const cw = this.container.clientWidth;
     const ch = this.container.clientHeight;
@@ -170,7 +173,7 @@ export class ARRenderer {
     const h = this.videoHeight * scale;
     const left = (cw - w) / 2;
     const top = (ch - h) / 2;
-    for (const el of [this.video, this.renderer.domElement, this.debugCanvas]) {
+    for (const el of [this.bgCanvas, this.renderer.domElement, this.debugCanvas]) {
       el.style.position = 'absolute';
       el.style.left = `${left}px`;
       el.style.top = `${top}px`;

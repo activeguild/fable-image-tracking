@@ -10,7 +10,7 @@
  *   they decay. Much cheaper and much more stable than re-detecting.
  */
 
-import { buildPyramid, type PyramidLevel } from '../core/imageops';
+import { buildPyramid, sampleBilinear, type PyramidLevel } from '../core/imageops';
 import { computeOrientation, detectFast, selectSpread } from '../core/fast';
 import { computeDescriptors, PATCH_BORDER } from '../core/orb';
 import { matchDescriptors } from '../core/matcher';
@@ -47,6 +47,10 @@ export interface TrackerOptions {
   maxTrackedPoints?: number;
   /** Run detection only every Nth frame while searching (saves CPU). */
   detectEveryN?: number;
+  /** Minimum photometric correlation (NCC) to accept a detection. */
+  minDetectNCC?: number;
+  /** Minimum photometric correlation (NCC) to keep tracking. */
+  minTrackNCC?: number;
   intrinsics?: CameraIntrinsics;
 }
 
@@ -80,6 +84,8 @@ export class ImageTracker {
       replenishBelow: options.replenishBelow ?? 30,
       maxTrackedPoints: options.maxTrackedPoints ?? 80,
       detectEveryN: options.detectEveryN ?? 2,
+      minDetectNCC: options.minDetectNCC ?? 0.55,
+      minTrackNCC: options.minTrackNCC ?? 0.45,
     };
     this.intrinsics = options.intrinsics ?? defaultIntrinsics(frameWidth, frameHeight);
   }
@@ -157,6 +163,12 @@ export class ImageTracker {
     if (!result || result.inliers.length < this.opts.minInliers) return;
     if (!this.isPlausible(result.H)) return;
 
+    // Photometric verification: geometry alone can be fooled by repetitive or
+    // coincidental structure; the warped appearance must also agree.
+    const inlierModel = result.inliers.map((i) => src[i]);
+    const ncc = appearanceNCC(this.target, inlierModel, result.H, pyramid[0]);
+    if (ncc < this.opts.minDetectNCC) return;
+
     this.H = result.H;
     this.framePoints = result.inliers.map((i) => dst[i]);
     this.modelPoints = result.inliers.map((i) => src[i]);
@@ -211,6 +223,15 @@ export class ImageTracker {
       maxIterations: 150,
     });
     if (!result || result.inliers.length < this.opts.minInliers || !this.isPlausible(result.H)) {
+      this.lost();
+      return;
+    }
+
+    // Photometric verification every frame: kills stale poses quickly when
+    // the target disappears, is occluded, or motion blur wipes the texture,
+    // instead of letting optical flow limp along on wrong content.
+    const ncc = appearanceNCC(this.target, result.inliers.map((i) => nextModel[i]), result.H, pyramid[0]);
+    if (ncc < this.opts.minTrackNCC) {
       this.lost();
       return;
     }
@@ -338,6 +359,59 @@ export class ImageTracker {
 export function defaultIntrinsics(width: number, height: number): CameraIntrinsics {
   const f = 0.8 * Math.max(width, height);
   return { fx: f, fy: f, cx: width / 2, cy: height / 2 };
+}
+
+/**
+ * Photometric consistency of a hypothesised homography: normalized cross
+ * correlation between target intensities at the given model points and frame
+ * intensities at their warped locations. NCC is invariant to global gain and
+ * offset, so lighting differences between the print/screen and the reference
+ * image are tolerated. Returns a value in [-1, 1]; higher is better.
+ */
+export function appearanceNCC(
+  target: Pick<CompiledTarget, 'gray' | 'width' | 'height'>,
+  modelPoints: Point2[],
+  H: Mat3,
+  frame: { data: Uint8Array; width: number; height: number },
+  maxSamples = 64
+): number {
+  const n = modelPoints.length;
+  if (n === 0) return -1;
+  const stride = Math.max(1, Math.floor(n / maxSamples));
+
+  const tVals: number[] = [];
+  const fVals: number[] = [];
+  for (let i = 0; i < n; i += stride) {
+    const mp = modelPoints[i];
+    if (mp.x < 0 || mp.y < 0 || mp.x > target.width - 1 || mp.y > target.height - 1) continue;
+    const p = applyHomography(H, mp.x, mp.y);
+    if (p.x < 1 || p.y < 1 || p.x > frame.width - 2 || p.y > frame.height - 2) continue;
+    tVals.push(sampleBilinear(target.gray, target.width, target.height, mp.x, mp.y));
+    fVals.push(sampleBilinear(frame.data, frame.width, frame.height, p.x, p.y));
+  }
+  const m = tVals.length;
+  if (m < 8) return -1;
+
+  let meanT = 0;
+  let meanF = 0;
+  for (let i = 0; i < m; i++) {
+    meanT += tVals[i];
+    meanF += fVals[i];
+  }
+  meanT /= m;
+  meanF /= m;
+  let covTF = 0;
+  let varT = 0;
+  let varF = 0;
+  for (let i = 0; i < m; i++) {
+    const dt = tVals[i] - meanT;
+    const df = fVals[i] - meanF;
+    covTF += dt * df;
+    varT += dt * dt;
+    varF += df * df;
+  }
+  if (varT < 1e-6 || varF < 1e-6) return -1;
+  return covTF / Math.sqrt(varT * varF);
 }
 
 function concatUint32(chunks: Uint32Array[]): Uint32Array {

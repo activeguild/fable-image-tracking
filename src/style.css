@@ -18,11 +18,17 @@ body {
   overflow: hidden;
 }
 
-#camera,
+#bg-canvas,
 #gl-canvas,
 #debug-canvas {
   position: absolute;
   pointer-events: none;
+}
+
+/* The video keeps playing as the frame source but is never shown directly:
+   the background canvas shows the exact frame each pose was computed from. */
+#camera {
+  display: none;
 }
 
 #hud {

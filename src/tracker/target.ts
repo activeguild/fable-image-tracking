@@ -14,6 +14,8 @@ export interface CompiledTarget {
   /** Compiled (processing) resolution of the reference image. */
   width: number;
   height: number;
+  /** Level-0 grayscale of the compiled image, kept for photometric checks. */
+  gray: Uint8Array;
   /** Physical size the target is assumed to have in the world. */
   widthMeters: number;
   heightMeters: number;
@@ -84,6 +86,7 @@ export function compileTarget(
   return {
     width,
     height,
+    gray,
     widthMeters,
     heightMeters,
     points: new Float32Array(allPoints),
