@@ -18,10 +18,14 @@ export class ARRenderer {
   private anchor = new THREE.Group();
   private cube: THREE.Mesh;
 
-  private positionFilter = new Vector3Filter(2.0, 1.5, 1.0);
+  // One-Euro position filter: low cutoff kills hand-tremor jitter at rest,
+  // high beta opens the filter wide as soon as the pose actually moves.
+  private positionFilter = new Vector3Filter(0.6, 3.0, 1.0);
   private smoothedQuat = new THREE.Quaternion();
+  private quatVelocity = 0; // low-passed angular velocity (rad/s)
   private hasPose = false;
   private lastPoseTime = -1;
+  private lastUpdateTime = -1;
   /** Keep showing the last pose this long (seconds) to bridge 1-frame dropouts. */
   private readonly graceSeconds = 0.12;
 
@@ -131,12 +135,17 @@ export class ARRenderer {
 
       if (!this.hasPose) {
         this.smoothedQuat.copy(quat);
+        this.quatVelocity = 0;
         this.hasPose = true;
       } else {
-        // Adaptive slerp: heavy smoothing for jitter-sized changes, near
-        // pass-through for fast rotation so content does not trail behind.
+        // One-Euro-style rotation smoothing: the cutoff frequency follows the
+        // (low-passed) angular velocity, so estimation noise is crushed while
+        // the target is steady but real rotation passes through immediately.
+        const dt = Math.min(0.1, Math.max(1e-3, timeSec - this.lastUpdateTime));
         const angle = this.smoothedQuat.angleTo(quat);
-        const alpha = Math.min(1, 0.35 + angle * 3.5);
+        this.quatVelocity += (angle / dt - this.quatVelocity) * Math.min(1, dt * 5);
+        const cutoff = 0.5 + 3.0 * this.quatVelocity;
+        const alpha = Math.min(1, 1 - Math.exp(-2 * Math.PI * cutoff * dt));
         this.smoothedQuat.slerp(quat, alpha);
       }
 
@@ -155,6 +164,7 @@ export class ARRenderer {
       }
     }
 
+    this.lastUpdateTime = timeSec;
     this.cube.rotation.z += spinDelta;
     this.renderer.render(this.scene, this.camera);
   }

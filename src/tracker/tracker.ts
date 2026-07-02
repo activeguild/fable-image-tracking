@@ -14,8 +14,16 @@ import { buildPyramid, sampleBilinear, type PyramidLevel } from '../core/imageop
 import { computeOrientation, detectFast, selectSpread } from '../core/fast';
 import { computeDescriptors, PATCH_BORDER } from '../core/orb';
 import { matchDescriptors } from '../core/matcher';
-import { ransacHomography, projectCorners } from '../core/ransac';
-import { applyHomography, invert3, matMul3, type Mat3, type Point2 } from '../core/homography';
+import { ransacHomography, projectCorners, type RansacResult } from '../core/ransac';
+import {
+  applyHomography,
+  computeHomography,
+  invert3,
+  matMul3,
+  symmetricTransferError2,
+  type Mat3,
+  type Point2,
+} from '../core/homography';
 import { poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
 import { trackPyrLK } from '../core/opticalflow';
 import type { CompiledTarget } from './target';
@@ -189,11 +197,13 @@ export class ImageTracker {
     // motion repeats, and warm-start optical flow there. This keeps points
     // locked on during fast pans that exceed the plain LK search range.
     let predicted: Point2[] | undefined;
+    let prior: Mat3 | null = this.H;
     if (this.H && this.prevH) {
       const prevInv = invert3(this.prevH);
       if (prevInv) {
         const motion = matMul3(this.H, prevInv);
         predicted = this.framePoints.map((p) => applyHomography(motion, p.x, p.y));
+        prior = matMul3(motion, this.H);
       }
     }
 
@@ -240,10 +250,18 @@ export class ImageTracker {
       return;
     }
 
-    const result = ransacHomography(nextModel, nextFrame, {
-      threshold: this.opts.ransacThreshold,
-      maxIterations: 150,
-    });
+    // Deterministic prior-guided fit first: RANSAC's random minimal samples
+    // make the estimate wobble frame to frame even on a static scene, which
+    // shows up as visible jitter. With last frame's H (advanced by the motion
+    // model) as a prior, gating + iterated least squares is stable and cheap.
+    // Full RANSAC remains as the fallback when the prior is way off.
+    let result = prior ? this.fitGuided(nextModel, nextFrame, prior) : null;
+    if (!result) {
+      result = ransacHomography(nextModel, nextFrame, {
+        threshold: this.opts.ransacThreshold,
+        maxIterations: 150,
+      });
+    }
     if (!result || result.inliers.length < this.opts.minInliers || !this.isPlausible(result.H)) {
       this.lost();
       return;
@@ -264,6 +282,36 @@ export class ImageTracker {
     this.modelPoints = result.inliers.map((i) => nextModel[i]);
 
     if (this.framePoints.length < this.opts.replenishBelow) this.replenish();
+  }
+
+  /**
+   * Deterministic homography fit using a strong prior: gate correspondences
+   * against the prior, least-squares fit, then tighten the gate and refit.
+   * Returns null when the prior does not explain enough points (fast fallback
+   * to RANSAC).
+   */
+  private fitGuided(model: Point2[], frame: Point2[], prior: Mat3): RansacResult | null {
+    const thr = this.opts.ransacThreshold;
+    let H = prior;
+    let inliers: number[] = [];
+    for (const gate of [thr * 2.5, thr]) {
+      const Hinv = invert3(H);
+      if (!Hinv) return null;
+      const gate2 = gate * gate;
+      inliers = [];
+      for (let i = 0; i < model.length; i++) {
+        const e = symmetricTransferError2(H, Hinv, model[i].x, model[i].y, frame[i].x, frame[i].y);
+        if (e < gate2) inliers.push(i);
+      }
+      if (inliers.length < Math.max(this.opts.minInliers, model.length * 0.5)) return null;
+      const fitted = computeHomography(
+        inliers.map((i) => model[i]),
+        inliers.map((i) => frame[i])
+      );
+      if (!fitted) return null;
+      H = fitted;
+    }
+    return { H, inliers };
   }
 
   /**

@@ -89,6 +89,29 @@ describe('ImageTracker end-to-end', () => {
     }
   });
 
+  it('holds a jitter-free pose on a static scene', () => {
+    const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
+    const H = similarity(0.55, 0.12, 150, 110);
+    const frame = renderFrame(targetImg, H);
+
+    const cornerHistory: { x: number; y: number }[][] = [];
+    for (let i = 0; i < 8; i++) {
+      const r = tracker.processFrame(frame);
+      expect(r.state).toBe('tracking');
+      if (i >= 2) cornerHistory.push(r.corners!);
+    }
+
+    // With a deterministic guided fit, identical frames must give an (almost)
+    // identical homography: frame-to-frame corner movement is sub-1/20th px.
+    for (let i = 1; i < cornerHistory.length; i++) {
+      for (let c = 0; c < 4; c++) {
+        const dx = cornerHistory[i][c].x - cornerHistory[i - 1][c].x;
+        const dy = cornerHistory[i][c].y - cornerHistory[i - 1][c].y;
+        expect(Math.hypot(dx, dy)).toBeLessThan(0.05);
+      }
+    }
+  });
+
   it('keeps tracking through fast, roughly constant motion', () => {
     const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
 
