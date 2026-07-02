@@ -11,6 +11,7 @@ import { defaultIntrinsics } from './tracker/tracker';
 import type { ReadyMessage, ResultMessage } from './tracker/worker';
 import { ARRenderer } from './render/renderer';
 import { createSampleTargetCanvas } from './sampleTarget';
+import { createSampleImageCanvas, sampleVideoUrl } from './sampleContent';
 
 const PROC_WIDTH = 360; // processing resolution (width); height follows aspect
 const TARGET_COMPILE_SIZE = 384;
@@ -243,16 +244,51 @@ function cleanupContentVideo(): void {
 
 debugToggle.addEventListener('change', () => renderer?.setDebugVisible(debugToggle.checked));
 
-contentSelect.addEventListener('change', () => {
-  if (contentSelect.value === 'cube') {
+function setVideoContent(src: string, objectUrl: string | null, selectValue: string): void {
+  cleanupContentVideo();
+  const vid = document.createElement('video');
+  vid.loop = true;
+  vid.muted = true;
+  vid.playsInline = true;
+  vid.addEventListener(
+    'loadeddata',
+    () => {
+      renderer?.setContent({ type: 'video', source: vid });
+      lastContentValue = selectValue;
+    },
+    { once: true }
+  );
+  vid.addEventListener('error', () => {
     cleanupContentVideo();
-    renderer?.setContent({ type: 'cube' });
-    lastContentValue = 'cube';
-    return;
+    contentSelect.value = lastContentValue;
+    alert('動画を読み込めませんでした');
+  });
+  vid.src = src;
+  contentVideo = vid;
+  contentVideoUrl = objectUrl;
+  void vid.play();
+}
+
+contentSelect.addEventListener('change', () => {
+  switch (contentSelect.value) {
+    case 'cube':
+      cleanupContentVideo();
+      renderer?.setContent({ type: 'cube' });
+      lastContentValue = 'cube';
+      break;
+    case 'image': // built-in sample image
+      cleanupContentVideo();
+      renderer?.setContent({ type: 'image', source: createSampleImageCanvas() });
+      lastContentValue = 'image';
+      break;
+    case 'video': // bundled sample video
+      setVideoContent(sampleVideoUrl(), null, 'video');
+      break;
+    default: // image-file / video-file: pick from the device
+      contentFile.accept = contentSelect.value === 'image-file' ? 'image/*' : 'video/*';
+      contentFile.value = '';
+      contentFile.click();
   }
-  contentFile.accept = contentSelect.value === 'image' ? 'image/*' : 'video/*';
-  contentFile.value = '';
-  contentFile.click();
 });
 
 contentFile.addEventListener('cancel', () => {
@@ -266,13 +302,13 @@ contentFile.addEventListener('change', () => {
     return;
   }
   const url = URL.createObjectURL(file);
-  if (contentSelect.value === 'image') {
+  if (contentSelect.value === 'image-file') {
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
       cleanupContentVideo();
       renderer?.setContent({ type: 'image', source: img });
-      lastContentValue = 'image';
+      lastContentValue = 'image-file';
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -281,28 +317,7 @@ contentFile.addEventListener('change', () => {
     };
     img.src = url;
   } else {
-    cleanupContentVideo();
-    const vid = document.createElement('video');
-    vid.loop = true;
-    vid.muted = true;
-    vid.playsInline = true;
-    vid.addEventListener(
-      'loadeddata',
-      () => {
-        renderer?.setContent({ type: 'video', source: vid });
-        lastContentValue = 'video';
-      },
-      { once: true }
-    );
-    vid.addEventListener('error', () => {
-      cleanupContentVideo();
-      contentSelect.value = lastContentValue;
-      alert('動画を読み込めませんでした');
-    });
-    vid.src = url;
-    contentVideo = vid;
-    contentVideoUrl = url;
-    void vid.play();
+    setVideoContent(url, url, 'video-file');
   }
 });
 
