@@ -97,6 +97,8 @@ export class ImageTracker {
    * projections distorted on the way out.
    */
   private k1 = 0;
+  /** Gyro rotation homography of the previously processed interval. */
+  private prevGyroH: Mat3 | null = null;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -147,13 +149,17 @@ export class ImageTracker {
     return out;
   }
 
-  /** Process one grayscale frame at the tracker's processing resolution. */
-  processFrame(gray: Uint8Array): TrackerResult {
+  /**
+   * Process one grayscale frame at the tracker's processing resolution.
+   * `gyroH` is an optional image-space rotation homography measured by the
+   * gyroscope over the interval since the previous frame (ideal pixels).
+   */
+  processFrame(gray: Uint8Array, gyroH: Mat3 | null = null): TrackerResult {
     this.frameCounter++;
     const pyramid = this.kernels.buildPyramid(gray, this.width, this.height, this.opts.framePyramidLevels);
 
     if (this.state === 'tracking' && this.prevPyramid) {
-      this.trackStep(pyramid);
+      this.trackStep(pyramid, gyroH);
       // If tracking just broke (H cleared by lost()), try to re-acquire on
       // this very frame instead of leaving a search-latency gap.
       if (this.H === null) this.detectStep(pyramid);
@@ -161,6 +167,7 @@ export class ImageTracker {
       this.detectStep(pyramid);
     }
 
+    this.prevGyroH = gyroH;
     this.prevPyramid = pyramid;
     return this.buildResult();
   }
@@ -241,23 +248,38 @@ export class ImageTracker {
 
   // ----------------------------------------------------------------- track
 
-  private trackStep(pyramid: PyramidLevel[]): void {
-    // Constant-velocity prediction: assume the frame-to-frame homography
-    // motion repeats, and warm-start optical flow there. This keeps points
-    // locked on during fast pans that exceed the plain LK search range.
+  private trackStep(pyramid: PyramidLevel[], gyroH: Mat3 | null): void {
+    // Motion prediction for the LK warm start and the fit prior. The visual
+    // constant-velocity model is corrected with the gyroscope when available:
+    // last interval's measured rotation is divided out of the visual motion
+    // (leaving the translation-ish residual) and replaced by the *current*
+    // interval's measured rotation. During fast rotation - exactly when the
+    // image blurs and vision fails - the prior stays accurate.
     let predicted: Point2[] | undefined;
     let prior: Mat3 | null = this.H;
+    let motion: Mat3 | null = null;
     if (this.H && this.prevH) {
       const prevInv = invert3(this.prevH);
       if (prevInv) {
-        // Motion lives in ideal space; LK guesses must be in sensor space.
-        const motion = matMul3(this.H, prevInv);
-        predicted = this.framePoints.map((p) => {
-          const ideal = this.undistort(p);
-          return this.distort(applyHomography(motion, ideal.x, ideal.y));
-        });
-        prior = matMul3(motion, this.H);
+        motion = matMul3(this.H, prevInv);
+        if (gyroH && this.prevGyroH) {
+          const gPrevInv = invert3(this.prevGyroH);
+          if (gPrevInv) motion = matMul3(gyroH, matMul3(gPrevInv, motion));
+        }
       }
+    } else if (this.H && gyroH) {
+      // First tracked frame after acquisition: no visual velocity yet, but
+      // the gyro already knows the rotation.
+      motion = gyroH;
+    }
+    if (this.H && motion) {
+      const m = motion;
+      // Motion lives in ideal space; LK guesses must be in sensor space.
+      predicted = this.framePoints.map((p) => {
+        const ideal = this.undistort(p);
+        return this.distort(applyHomography(m, ideal.x, ideal.y));
+      });
+      prior = matMul3(m, this.H);
     }
 
     const flows = this.kernels.trackPyrLK(this.prevPyramid!, pyramid, this.framePoints, {

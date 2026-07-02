@@ -10,6 +10,7 @@ import { compileTarget } from './target';
 import { ImageTracker } from './tracker';
 import { jsKernels, type CVKernels } from '../core/kernels';
 import { createWasmKernels } from '../wasm/engine';
+import { gyroHomography, type GyroDelta } from '../core/imu';
 
 export interface InitMessage {
   type: 'init';
@@ -25,6 +26,8 @@ export interface FrameMessage {
   type: 'frame';
   buffer: ArrayBuffer;
   t: number; // capture time (performance.now() in the main thread, ms)
+  /** Integrated gyro rotation (camera frame, radians) since the last frame. */
+  gyro?: GyroDelta | null;
 }
 
 export interface ReadyMessage {
@@ -95,8 +98,9 @@ self.onmessage = async (event: MessageEvent<InitMessage | FrameMessage>) => {
   if (msg.type === 'frame') {
     if (!tracker) return;
     const gray = new Uint8Array(msg.buffer);
+    const gyroH = msg.gyro ? gyroHomography(msg.gyro, tracker.intrinsics) : null;
     const start = performance.now();
-    const r = tracker.processFrame(gray);
+    const r = tracker.processFrame(gray, gyroH);
     const result: ResultMessage = {
       type: 'result',
       t: msg.t,
