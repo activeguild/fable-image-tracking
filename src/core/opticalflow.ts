@@ -19,6 +19,12 @@ export interface FlowOptions {
   maxIterations?: number;
   epsilon?: number; // stop when the update is smaller than this (pixels)
   maxError?: number; // reject tracks with residual above this
+  /**
+   * Optional predicted positions in the next image (level-0 coords), e.g.
+   * from a constant-velocity motion model. Warm-starting the coarsest level
+   * lets the tracker follow motion far beyond the search window.
+   */
+  initialGuess?: Point2[];
 }
 
 export function trackPyrLK(
@@ -27,7 +33,7 @@ export function trackPyrLK(
   points: Point2[],
   options: FlowOptions = {}
 ): FlowResult[] {
-  const { windowRadius = 4, maxIterations = 12, epsilon = 0.01, maxError = 24 } = options;
+  const { windowRadius = 4, maxIterations = 12, epsilon = 0.01, maxError = 24, initialGuess } = options;
   const numLevels = Math.min(prevPyr.length, nextPyr.length);
   const win = 2 * windowRadius + 1;
   const winArea = win * win;
@@ -36,11 +42,14 @@ export function trackPyrLK(
   const gradY = new Float32Array(winArea);
   const template = new Float32Array(winArea);
 
-  return points.map((p) => trackPoint(p));
+  return points.map((p, i) => trackPoint(p, initialGuess?.[i]));
 
-  function trackPoint(p: Point2): FlowResult {
-    let gx = 0; // flow guess, in the coordinates of the current level
-    let gy = 0;
+  function trackPoint(p: Point2, guess?: Point2): FlowResult {
+    // Flow guess in the coordinates of the current level, seeded at the
+    // coarsest level from the motion prediction when one is provided.
+    const topScale = prevPyr[numLevels - 1].scale;
+    let gx = guess ? (guess.x - p.x) / topScale : 0;
+    let gy = guess ? (guess.y - p.y) / topScale : 0;
     let outX = p.x;
     let outY = p.y;
     let finalErr = Infinity;

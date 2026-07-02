@@ -89,6 +89,20 @@ describe('ImageTracker end-to-end', () => {
     }
   });
 
+  it('keeps tracking through fast, roughly constant motion', () => {
+    const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
+
+    // Acquire, then accelerate: per-frame translation ramps up to 20 px,
+    // which only stays trackable thanks to the constant-velocity warm start.
+    const steps = [0, 6, 20, 40, 60, 80];
+    for (let i = 0; i < steps.length; i++) {
+      const H = similarity(0.55, 0.1, 90 + steps[i], 110);
+      const r = tracker.processFrame(renderFrame(targetImg, H));
+      expect(r.state, `frame ${i}`).toBe('tracking');
+      expect(maxCornerError(r.H!, H)).toBeLessThan(6);
+    }
+  });
+
   it('scores appearance high for the true homography and low for a wrong one', () => {
     const H = similarity(0.6, 0.2, 160, 120);
     const frame = { data: renderFrame(targetImg, H), width: FRAME_W, height: FRAME_H };

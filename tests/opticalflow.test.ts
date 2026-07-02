@@ -56,6 +56,38 @@ describe('trackPyrLK', () => {
     }
   });
 
+  it('follows motion beyond the search range when warm-started', () => {
+    const w = 240;
+    const h = 200;
+    const dx = 25;
+    const dy = -14;
+    const img = randomTexture(w, h, 33, 6);
+    const moved = shiftImage(img, w, h, dx, dy);
+    const prevPyr = buildPyramid(img, w, h, 3);
+    const nextPyr = buildPyramid(moved, w, h, 3);
+    const points = [
+      { x: 80, y: 80 },
+      { x: 140, y: 110 },
+      { x: 100, y: 140 },
+    ];
+
+    // Cold start: the shift is far outside the pyramid search range.
+    const cold = trackPyrLK(prevPyr, nextPyr, points);
+    const coldGood = cold.filter(
+      (f, i) => f.ok && Math.hypot(f.x - points[i].x - dx, f.y - points[i].y - dy) < 1
+    );
+
+    // Warm start with an (imperfect) motion prediction.
+    const guess = points.map((p) => ({ x: p.x + dx - 2, y: p.y + dy + 1.5 }));
+    const warm = trackPyrLK(prevPyr, nextPyr, points, { initialGuess: guess });
+    const warmGood = warm.filter(
+      (f, i) => f.ok && Math.hypot(f.x - points[i].x - dx, f.y - points[i].y - dy) < 1
+    );
+
+    expect(warmGood.length).toBe(points.length);
+    expect(warmGood.length).toBeGreaterThan(coldGood.length);
+  });
+
   it('flags untrackable (flat) regions', () => {
     const w = 128;
     const h = 128;

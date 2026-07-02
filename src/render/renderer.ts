@@ -18,7 +18,7 @@ export class ARRenderer {
   private anchor = new THREE.Group();
   private cube: THREE.Mesh;
 
-  private positionFilter = new Vector3Filter(1.2, 1.2, 1.0);
+  private positionFilter = new Vector3Filter(2.0, 1.5, 1.0);
   private smoothedQuat = new THREE.Quaternion();
   private hasPose = false;
   private lastPoseTime = -1;
@@ -136,7 +136,7 @@ export class ARRenderer {
         // Adaptive slerp: heavy smoothing for jitter-sized changes, near
         // pass-through for fast rotation so content does not trail behind.
         const angle = this.smoothedQuat.angleTo(quat);
-        const alpha = Math.min(1, 0.3 + angle * 2.5);
+        const alpha = Math.min(1, 0.35 + angle * 3.5);
         this.smoothedQuat.slerp(quat, alpha);
       }
 

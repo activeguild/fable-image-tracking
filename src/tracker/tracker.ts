@@ -15,7 +15,7 @@ import { computeOrientation, detectFast, selectSpread } from '../core/fast';
 import { computeDescriptors, PATCH_BORDER } from '../core/orb';
 import { matchDescriptors } from '../core/matcher';
 import { ransacHomography, projectCorners } from '../core/ransac';
-import { applyHomography, matMul3, type Mat3, type Point2 } from '../core/homography';
+import { applyHomography, invert3, matMul3, type Mat3, type Point2 } from '../core/homography';
 import { poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
 import { trackPyrLK } from '../core/opticalflow';
 import type { CompiledTarget } from './target';
@@ -67,6 +67,7 @@ export class ImageTracker {
   private framePoints: Point2[] = []; // tracked points, frame coords
   private modelPoints: Point2[] = []; // matching points, compiled-target pixel coords
   private H: Mat3 | null = null;
+  private prevH: Mat3 | null = null; // H of the frame before, for motion prediction
   private frameCounter = 0;
   private planeToFrame: Mat3 | null = null;
 
@@ -77,13 +78,13 @@ export class ImageTracker {
     this.opts = {
       fastThreshold: options.fastThreshold ?? 20,
       maxFrameFeatures: options.maxFrameFeatures ?? 500,
-      framePyramidLevels: options.framePyramidLevels ?? 3,
+      framePyramidLevels: options.framePyramidLevels ?? 4,
       minMatches: options.minMatches ?? 12,
       minInliers: options.minInliers ?? 10,
       ransacThreshold: options.ransacThreshold ?? 3,
       replenishBelow: options.replenishBelow ?? 30,
       maxTrackedPoints: options.maxTrackedPoints ?? 80,
-      detectEveryN: options.detectEveryN ?? 2,
+      detectEveryN: options.detectEveryN ?? 1,
       minDetectNCC: options.minDetectNCC ?? 0.55,
       minTrackNCC: options.minTrackNCC ?? 0.45,
     };
@@ -97,6 +98,9 @@ export class ImageTracker {
 
     if (this.state === 'tracking' && this.prevPyramid) {
       this.trackStep(pyramid);
+      // If tracking just broke (H cleared by lost()), try to re-acquire on
+      // this very frame instead of leaving a search-latency gap.
+      if (this.H === null) this.detectStep(pyramid);
     } else if (this.frameCounter % this.opts.detectEveryN === 0) {
       this.detectStep(pyramid);
     }
@@ -108,6 +112,7 @@ export class ImageTracker {
   reset(): void {
     this.state = 'searching';
     this.H = null;
+    this.prevH = null;
     this.framePoints = [];
     this.modelPoints = [];
     this.prevPyramid = null;
@@ -170,6 +175,7 @@ export class ImageTracker {
     if (ncc < this.opts.minDetectNCC) return;
 
     this.H = result.H;
+    this.prevH = null; // fresh acquisition: no velocity estimate yet
     this.framePoints = result.inliers.map((i) => dst[i]);
     this.modelPoints = result.inliers.map((i) => src[i]);
     this.capTrackedPoints();
@@ -179,10 +185,23 @@ export class ImageTracker {
   // ----------------------------------------------------------------- track
 
   private trackStep(pyramid: PyramidLevel[]): void {
+    // Constant-velocity prediction: assume the frame-to-frame homography
+    // motion repeats, and warm-start optical flow there. This keeps points
+    // locked on during fast pans that exceed the plain LK search range.
+    let predicted: Point2[] | undefined;
+    if (this.H && this.prevH) {
+      const prevInv = invert3(this.prevH);
+      if (prevInv) {
+        const motion = matMul3(this.H, prevInv);
+        predicted = this.framePoints.map((p) => applyHomography(motion, p.x, p.y));
+      }
+    }
+
     const flows = trackPyrLK(this.prevPyramid!, pyramid, this.framePoints, {
       windowRadius: 4,
       maxIterations: 12,
       maxError: 24,
+      initialGuess: predicted,
     });
 
     // Forward-backward consistency check.
@@ -194,10 +213,13 @@ export class ImageTracker {
         forwardIdx.push(i);
       }
     }
+    // The backward pass must undo the same (possibly large) motion, so give
+    // it the original positions as its warm start.
     const backFlows = trackPyrLK(pyramid, this.prevPyramid!, forwardPts, {
       windowRadius: 4,
       maxIterations: 8,
       maxError: 32,
+      initialGuess: forwardIdx.map((i) => this.framePoints[i]),
     });
 
     const nextFrame: Point2[] = [];
@@ -236,6 +258,7 @@ export class ImageTracker {
       return;
     }
 
+    this.prevH = this.H;
     this.H = result.H;
     this.framePoints = result.inliers.map((i) => nextFrame[i]);
     this.modelPoints = result.inliers.map((i) => nextModel[i]);
@@ -287,6 +310,7 @@ export class ImageTracker {
   private lost(): void {
     this.state = 'searching';
     this.H = null;
+    this.prevH = null;
     this.framePoints = [];
     this.modelPoints = [];
   }
