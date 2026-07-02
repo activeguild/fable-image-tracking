@@ -64,15 +64,33 @@ export class QuadFilter {
 
     const s1 = this.s1;
     const s0 = this.s0;
-    if (weight < 1 && s1 && s0) {
+    if (s1 && s0) {
       const dt = s1.t - s0.t;
       const age = timeSec - s1.t;
       if (dt > 1e-4 && dt <= 0.15 && age > 0 && age < 0.15) {
         const k = Math.min(age / dt, 3);
-        const w = Math.max(0.15, weight);
+        let meanInnovation = 0;
+        const pred = new Array<number>(8);
         for (let i = 0; i < 8; i++) {
-          const pred = s1.c[i] + (s1.c[i] - s0.c[i]) * k;
-          c[i] = pred + (c[i] - pred) * w;
+          pred[i] = s1.c[i] + (s1.c[i] - s0.c[i]) * k;
+        }
+        for (let i = 0; i < 4; i++) {
+          meanInnovation += Math.hypot(c[i * 2] - pred[i * 2], c[i * 2 + 1] - pred[i * 2 + 1]);
+        }
+        meanInnovation /= 4;
+        // Innovation rate limit: even a full-confidence measurement may only
+        // correct "3 px + 35% of the gap" per sample. Steady tracking
+        // (innovation < ~4.6 px) passes through untouched; discontinuities
+        // (replenish corrections, re-acquisitions) glide over ~3 samples
+        // instead of yanking the content.
+        let gain = Math.max(0.15, weight);
+        if (meanInnovation > 1e-6) {
+          gain = Math.min(gain, (3 + 0.35 * meanInnovation) / meanInnovation);
+        }
+        if (gain < 1) {
+          for (let i = 0; i < 8; i++) {
+            c[i] = pred[i] + (c[i] - pred[i]) * gain;
+          }
         }
       }
     }

@@ -119,7 +119,7 @@ export class ImageTracker {
       minMatches: options.minMatches ?? 12,
       minInliers: options.minInliers ?? 10,
       ransacThreshold: options.ransacThreshold ?? 3,
-      replenishBelow: options.replenishBelow ?? 30,
+      replenishBelow: options.replenishBelow ?? 45,
       maxTrackedPoints: options.maxTrackedPoints ?? 80,
       detectEveryN: options.detectEveryN ?? 1,
       minDetectNCC: options.minDetectNCC ?? 0.55,
@@ -508,7 +508,10 @@ export class ImageTracker {
     const existing = new Set(this.modelPoints.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`));
     const margin = 8;
     const pts = this.target.points;
-    for (let i = 0; i < pts.length / 2 && this.framePoints.length < this.opts.maxTrackedPoints; i++) {
+    // Re-seed gradually (<= 20 points per frame): a wholesale reset of the
+    // point set applies any accumulated bias as one visible correction jump.
+    const cap = Math.min(this.opts.maxTrackedPoints, this.framePoints.length + 20);
+    for (let i = 0; i < pts.length / 2 && this.framePoints.length < cap; i++) {
       const mx = pts[i * 2];
       const my = pts[i * 2 + 1];
       const key = `${mx.toFixed(1)},${my.toFixed(1)}`;
