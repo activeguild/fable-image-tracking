@@ -92,6 +92,20 @@ body {
   font-size: 13px;
 }
 
+.tap-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  background: rgba(17, 24, 39, 0.9);
+  color: #f9fafb;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  z-index: 20;
+  pointer-events: none;
+}
+
 #start-overlay {
   position: fixed;
   inset: 0;

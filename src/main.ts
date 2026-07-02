@@ -264,48 +264,84 @@ function cleanupContentVideo(): void {
 debugToggle.addEventListener('change', () => renderer?.setDebugVisible(debugToggle.checked));
 
 /**
- * Play the bundled sample video. It is fetched as a Blob first: iOS Safari
- * requires HTTP Range support to stream <video> sources, which dev/static
- * servers often lack - a blob: URL sidesteps that entirely.
+ * The sample video is prefetched as a Blob at startup for two reasons:
+ * - iOS Safari needs HTTP Range support to stream <video> sources, which the
+ *   dev/static server lacks; a blob: URL sidesteps that.
+ * - play() must be called synchronously inside the user gesture (in Low
+ *   Power Mode iOS blocks even muted autoplay without one), so the media
+ *   must already be available when the selector fires.
  */
-async function setSampleVideoContent(): Promise<void> {
-  try {
-    const response = await fetch(sampleVideoUrl());
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const url = URL.createObjectURL(await response.blob());
+let sampleVideoBlobUrl: string | null = null;
+let sampleVideoFetch: Promise<string> | null = null;
+
+function prefetchSampleVideo(): Promise<string> {
+  if (!sampleVideoFetch) {
+    sampleVideoFetch = fetch(sampleVideoUrl())
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.blob();
+      })
+      .then((blob) => {
+        sampleVideoBlobUrl = URL.createObjectURL(blob);
+        return sampleVideoBlobUrl;
+      });
+  }
+  return sampleVideoFetch;
+}
+void prefetchSampleVideo();
+
+function startSampleVideo(url: string): void {
+  cleanupContentVideo();
+  const vid = document.createElement('video');
+  vid.loop = true;
+  vid.muted = true;
+  vid.playsInline = true;
+  vid.addEventListener(
+    'loadeddata',
+    () => {
+      renderer?.setContent({ type: 'video', source: vid });
+      lastContentValue = 'video';
+    },
+    { once: true }
+  );
+  vid.addEventListener('error', () => {
     cleanupContentVideo();
-    const vid = document.createElement('video');
-    vid.loop = true;
-    vid.muted = true;
-    vid.playsInline = true;
-    vid.addEventListener(
-      'loadeddata',
-      () => {
-        renderer?.setContent({ type: 'video', source: vid });
-        lastContentValue = 'video';
-        void vid.play();
-      },
-      { once: true }
-    );
-    vid.addEventListener('error', () => {
-      cleanupContentVideo();
-      contentSelect.value = lastContentValue;
-      alert('動画を読み込めませんでした');
-    });
-    vid.src = url;
-    contentVideo = vid;
-    contentVideoUrl = url;
-    void vid.play();
-  } catch {
     contentSelect.value = lastContentValue;
     alert('動画を読み込めませんでした');
-  }
+  });
+  vid.src = url; // shared cached blob URL; never revoked here
+  contentVideo = vid;
+  contentVideoUrl = null;
+  vid.play()?.catch(() => showTapToPlay(vid));
+}
+
+/** Fallback when autoplay is blocked (e.g. iOS Low Power Mode). */
+function showTapToPlay(vid: HTMLVideoElement): void {
+  const hint = document.createElement('div');
+  hint.className = 'tap-hint';
+  hint.textContent = '画面をタップすると動画が再生されます';
+  document.body.appendChild(hint);
+  const resume = () => {
+    hint.remove();
+    if (contentVideo === vid) void vid.play();
+  };
+  document.addEventListener('pointerdown', resume, { once: true });
 }
 
 function applyContent(value: string): void {
   switch (value) {
     case 'video':
-      void setSampleVideoContent();
+      if (sampleVideoBlobUrl) {
+        // Synchronous path keeps the user-gesture context for play().
+        startSampleVideo(sampleVideoBlobUrl);
+      } else {
+        prefetchSampleVideo()
+          .then((url) => startSampleVideo(url))
+          .catch(() => {
+            contentSelect.value = lastContentValue;
+            alert('動画を読み込めませんでした');
+          });
+      }
       break;
     case 'cube':
       cleanupContentVideo();
