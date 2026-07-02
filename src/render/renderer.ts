@@ -4,18 +4,31 @@
  * tracker output is restored by extrapolating poses to the render timestamp
  * (see core/predictor.ts). A transparent WebGL canvas is layered on top with
  * a camera whose projection matches the tracker's pinhole intrinsics.
+ *
+ * Anchor children are split into user content (cube / image / video) and the
+ * debug registration helpers (target outline, translucent plane, axes) that
+ * visualise what the tracker has estimated; the latter can be toggled.
  */
 
 import * as THREE from 'three';
 import type { Pose, CameraIntrinsics } from '../core/pose';
 import { Vector3Filter } from '../core/filter';
 
+export type ContentSpec =
+  | { type: 'cube' }
+  | { type: 'image'; source: HTMLImageElement | HTMLCanvasElement }
+  | { type: 'video'; source: HTMLVideoElement };
+
 export class ARRenderer {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private anchor = new THREE.Group();
-  private cube: THREE.Mesh;
+  private contentGroup = new THREE.Group();
+  private debugGroup = new THREE.Group();
+  private spinTarget: THREE.Object3D | null = null;
+  private content: ContentSpec = { type: 'cube' };
+  private contentTexture: THREE.Texture | null = null;
 
   // One-Euro position filter: low cutoff kills hand-tremor jitter at rest,
   // high beta opens the filter wide as soon as the pose actually moves.
@@ -30,6 +43,8 @@ export class ARRenderer {
 
   private videoWidth = 1280;
   private videoHeight = 720;
+  private targetW = 0.2;
+  private targetH = 0.2;
 
   constructor(
     private container: HTMLElement,
@@ -44,6 +59,8 @@ export class ARRenderer {
 
     this.anchor.matrixAutoUpdate = false;
     this.anchor.visible = false;
+    this.anchor.add(this.contentGroup);
+    this.anchor.add(this.debugGroup);
     this.scene.add(this.anchor);
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x555566, 2.2);
@@ -52,30 +69,39 @@ export class ARRenderer {
     dir.position.set(0.4, 1, 0.6);
     this.scene.add(dir);
 
-    this.cube = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x4f8cff, roughness: 0.35, metalness: 0.1 })
-    );
-    this.anchor.add(this.cube);
-
     window.addEventListener('resize', () => this.layout());
   }
 
-  /** Populate anchor content sized to the physical target. */
+  /** Rebuild anchor content and debug helpers, sized to the physical target. */
   setTargetSize(widthMeters: number, heightMeters: number): void {
-    // Remove previous helpers except the cube.
-    for (const child of [...this.anchor.children]) {
-      if (child !== this.cube) this.anchor.remove(child);
-    }
+    this.targetW = widthMeters;
+    this.targetH = heightMeters;
+    this.rebuildDebugHelpers();
+    this.rebuildContent();
+  }
+
+  /** Show or hide the registration debug helpers (green outline/plane/axes). */
+  setDebugVisible(visible: boolean): void {
+    this.debugGroup.visible = visible;
+  }
+
+  /** Switch the displayed content (cube, still image, or video). */
+  setContent(spec: ContentSpec): void {
+    this.content = spec;
+    this.rebuildContent();
+  }
+
+  private rebuildDebugHelpers(): void {
+    disposeChildren(this.debugGroup);
 
     const outline = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.PlaneGeometry(widthMeters, heightMeters)),
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(this.targetW, this.targetH)),
       new THREE.LineBasicMaterial({ color: 0x00e5a0 })
     );
-    this.anchor.add(outline);
+    this.debugGroup.add(outline);
 
     const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(widthMeters, heightMeters),
+      new THREE.PlaneGeometry(this.targetW, this.targetH),
       new THREE.MeshBasicMaterial({
         color: 0x00e5a0,
         transparent: true,
@@ -83,15 +109,56 @@ export class ARRenderer {
         side: THREE.DoubleSide,
       })
     );
-    this.anchor.add(plane);
+    this.debugGroup.add(plane);
 
-    const axes = new THREE.AxesHelper(widthMeters * 0.4);
-    this.anchor.add(axes);
+    this.debugGroup.add(new THREE.AxesHelper(this.targetW * 0.4));
+  }
 
-    const s = widthMeters * 0.22;
-    this.cube.geometry.dispose();
-    this.cube.geometry = new THREE.BoxGeometry(s, s, s);
-    this.cube.position.set(0, 0, s * 0.5 + widthMeters * 0.05);
+  private rebuildContent(): void {
+    disposeChildren(this.contentGroup);
+    this.spinTarget = null;
+    if (this.contentTexture) {
+      this.contentTexture.dispose();
+      this.contentTexture = null;
+    }
+
+    if (this.content.type === 'cube') {
+      const s = this.targetW * 0.22;
+      const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(s, s, s),
+        new THREE.MeshStandardMaterial({ color: 0x4f8cff, roughness: 0.35, metalness: 0.1 })
+      );
+      cube.position.set(0, 0, s * 0.5 + this.targetW * 0.05);
+      this.contentGroup.add(cube);
+      this.spinTarget = cube;
+      return;
+    }
+
+    // Image / video: an unlit plane fitted inside the target rectangle,
+    // floated a hair above it to avoid z-fighting with the debug plane.
+    let texture: THREE.Texture;
+    let mediaW: number;
+    let mediaH: number;
+    if (this.content.type === 'image') {
+      texture = new THREE.Texture(this.content.source);
+      texture.needsUpdate = true;
+      mediaW = this.content.source.width;
+      mediaH = this.content.source.height;
+    } else {
+      texture = new THREE.VideoTexture(this.content.source);
+      mediaW = this.content.source.videoWidth || 16;
+      mediaH = this.content.source.videoHeight || 9;
+    }
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.contentTexture = texture;
+
+    const fit = Math.min(this.targetW / mediaW, this.targetH / mediaH);
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(mediaW * fit, mediaH * fit),
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
+    );
+    plane.position.set(0, 0, 0.002);
+    this.contentGroup.add(plane);
   }
 
   setVideoSize(width: number, height: number): void {
@@ -162,7 +229,7 @@ export class ARRenderer {
     }
 
     this.lastUpdateTime = timeSec;
-    this.cube.rotation.z += spinDelta;
+    if (this.spinTarget) this.spinTarget.rotation.z += spinDelta;
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -189,5 +256,18 @@ export class ARRenderer {
     }
     this.renderer.setSize(w, h, false);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  }
+}
+
+function disposeChildren(group: THREE.Group): void {
+  for (const child of [...group.children]) {
+    group.remove(child);
+    child.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(material)) material.forEach((mat) => mat.dispose());
+      else if (material) material.dispose();
+    });
   }
 }

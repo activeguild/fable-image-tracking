@@ -25,6 +25,8 @@ const startOverlay = document.getElementById('start-overlay') as HTMLDivElement;
 const startButton = document.getElementById('start-button') as HTMLButtonElement;
 const uploadInput = document.getElementById('target-upload') as HTMLInputElement;
 const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
+const contentSelect = document.getElementById('content-select') as HTMLSelectElement;
+const contentFile = document.getElementById('content-file') as HTMLInputElement;
 
 const worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
 const predictor = new PosePredictor();
@@ -133,6 +135,7 @@ function setupProcessing(): void {
   renderer = new ARRenderer(container, video, glCanvas, debugCanvas);
   renderer.setVideoSize(vw, vh);
   renderer.setIntrinsics(defaultIntrinsics(procW, procH), procW, procH);
+  renderer.setDebugVisible(debugToggle.checked);
 }
 
 function captureAndSend(nowMs: number): void {
@@ -219,6 +222,89 @@ async function start(): Promise<void> {
 }
 
 startButton.addEventListener('click', () => void start());
+
+// ---------------------------------------------------------------- content UI
+
+let contentVideo: HTMLVideoElement | null = null;
+let contentVideoUrl: string | null = null;
+let lastContentValue = 'cube';
+
+function cleanupContentVideo(): void {
+  if (contentVideo) {
+    contentVideo.pause();
+    contentVideo.removeAttribute('src');
+    contentVideo = null;
+  }
+  if (contentVideoUrl) {
+    URL.revokeObjectURL(contentVideoUrl);
+    contentVideoUrl = null;
+  }
+}
+
+debugToggle.addEventListener('change', () => renderer?.setDebugVisible(debugToggle.checked));
+
+contentSelect.addEventListener('change', () => {
+  if (contentSelect.value === 'cube') {
+    cleanupContentVideo();
+    renderer?.setContent({ type: 'cube' });
+    lastContentValue = 'cube';
+    return;
+  }
+  contentFile.accept = contentSelect.value === 'image' ? 'image/*' : 'video/*';
+  contentFile.value = '';
+  contentFile.click();
+});
+
+contentFile.addEventListener('cancel', () => {
+  contentSelect.value = lastContentValue;
+});
+
+contentFile.addEventListener('change', () => {
+  const file = contentFile.files?.[0];
+  if (!file) {
+    contentSelect.value = lastContentValue;
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  if (contentSelect.value === 'image') {
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      cleanupContentVideo();
+      renderer?.setContent({ type: 'image', source: img });
+      lastContentValue = 'image';
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      contentSelect.value = lastContentValue;
+      alert('画像を読み込めませんでした');
+    };
+    img.src = url;
+  } else {
+    cleanupContentVideo();
+    const vid = document.createElement('video');
+    vid.loop = true;
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.addEventListener(
+      'loadeddata',
+      () => {
+        renderer?.setContent({ type: 'video', source: vid });
+        lastContentValue = 'video';
+      },
+      { once: true }
+    );
+    vid.addEventListener('error', () => {
+      cleanupContentVideo();
+      contentSelect.value = lastContentValue;
+      alert('動画を読み込めませんでした');
+    });
+    vid.src = url;
+    contentVideo = vid;
+    contentVideoUrl = url;
+    void vid.play();
+  }
+});
 
 uploadInput.addEventListener('change', () => {
   const file = uploadInput.files?.[0];

@@ -15,8 +15,19 @@
 
     <div id="hud">
       <div id="status">initializing...</div>
-      <label id="debug-toggle-label"><input type="checkbox" id="debug-toggle" checked />特徴点を表示</label>
+      <div id="hud-controls">
+        <label id="content-label">
+          コンテンツ:
+          <select id="content-select">
+            <option value="cube">キューブ</option>
+            <option value="image">画像</option>
+            <option value="video">動画</option>
+          </select>
+        </label>
+        <label id="debug-toggle-label"><input type="checkbox" id="debug-toggle" checked />判定を表示</label>
+      </div>
     </div>
+    <input type="file" id="content-file" hidden />
 
     <div id="start-overlay">
       <div class="panel">
