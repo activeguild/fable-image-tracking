@@ -107,7 +107,12 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
     // blur, brief occlusion) are bridged by coasting on the last measurement
     // until it goes stale (maxAge), instead of blinking the content off.
     if (msg.pose) predictor.addSample({ R: msg.pose.R, t: msg.pose.t }, msg.t / 1000);
-    if (msg.corners) quadFilter.addSample(msg.corners, msg.t / 1000);
+    if (msg.corners) {
+      // Confidence from the inlier count: blur/dim frames with few surviving
+      // points get blended toward the motion prediction instead of trusted.
+      const weight = Math.min(1, Math.max(0.2, msg.inlierCount / 50));
+      quadFilter.addSample(msg.corners, msg.t / 1000, weight);
+    }
     // Adopt the worker's self-calibrated focal length for the 3D camera.
     if (renderer && Math.abs(msg.fx - lastFx) / lastFx > 0.01) {
       lastFx = msg.fx;

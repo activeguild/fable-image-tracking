@@ -110,6 +110,26 @@ describe('QuadFilter', () => {
     expect(Math.hypot(q2[2].x - (110 + 250), q2[2].y - (120 - 150))).toBeLessThan(20);
   });
 
+  it('down-weights low-confidence measurements toward the prediction', () => {
+    const unfiltered = { minCutoff: 1000, beta: 1000 };
+    const f = new QuadFilter(unfiltered);
+    // Steady motion: +2 px per 20 ms sample.
+    f.addSample(quad(0), 10.0);
+    f.addSample(quad(2), 10.02);
+    // Next measurement SHOULD be ~4, but blur scattered it to 14 (+10 px off).
+    // With weight 0.2 the stored sample stays near the predicted 4.
+    f.addSample(quad(14), 10.04, 0.2);
+    const q = f.predict(10.04)!;
+    expect(q[0].x - 10).toBeGreaterThan(3);
+    expect(q[0].x - 10).toBeLessThan(7); // 4 + (14-4)*0.2 = 6
+    // A full-confidence measurement passes through unchanged.
+    const g = new QuadFilter(unfiltered);
+    g.addSample(quad(0), 10.0);
+    g.addSample(quad(2), 10.02);
+    g.addSample(quad(14), 10.04, 1);
+    expect(g.predict(10.04)![0].x - 10).toBeCloseTo(14, 1);
+  });
+
   it('clears cleanly', () => {
     const f = new QuadFilter();
     f.addSample(quad(0), 10.0);
