@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Fable Image Tracking — WebAR from scratch</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="ar-container">
+      <video id="camera" autoplay muted playsinline></video>
+      <canvas id="gl-canvas"></canvas>
+      <canvas id="debug-canvas"></canvas>
+    </div>
+
+    <div id="hud">
+      <div id="status">initializing...</div>
+      <label id="debug-toggle-label"><input type="checkbox" id="debug-toggle" checked />特徴点を表示</label>
+    </div>
+
+    <div id="start-overlay">
+      <div class="panel">
+        <h1>Fable Image Tracking</h1>
+        <p>
+          8th Wall 風の image tracking をスクラッチ実装した WebAR デモです。<br />
+          カメラでトラッキングターゲットを映すと、3D コンテンツが画像に張り付きます。
+        </p>
+        <ol>
+          <li><a href="/target.html" target="_blank" rel="noopener">サンプルターゲットを別画面で開く</a>（または印刷）</li>
+          <li>下のボタンでカメラを起動し、ターゲットを映す</li>
+        </ol>
+        <button id="start-button">カメラを起動してはじめる</button>
+        <p class="alt">
+          自分の画像をターゲットにする:
+          <input type="file" id="target-upload" accept="image/*" />
+        </p>
+        <p class="hint">※ 特徴点の多い（模様が複雑な）画像ほど安定して追跡できます。</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

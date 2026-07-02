@@ -1,0 +1,118 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #e5e7eb;
+}
+
+#ar-container {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+#camera,
+#gl-canvas,
+#debug-canvas {
+  position: absolute;
+  pointer-events: none;
+}
+
+#hud {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+  font-size: 13px;
+}
+
+#status {
+  font-variant-numeric: tabular-nums;
+  white-space: pre-line;
+}
+
+#debug-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+#start-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 10, 18, 0.94);
+  z-index: 10;
+  padding: 16px;
+}
+
+#start-overlay.hidden {
+  display: none;
+}
+
+.panel {
+  max-width: 460px;
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 12px;
+  padding: 24px 28px;
+  line-height: 1.7;
+}
+
+.panel h1 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.panel p,
+.panel ol {
+  font-size: 14px;
+  color: #cbd5e1;
+}
+
+.panel a {
+  color: #60a5fa;
+}
+
+#start-button {
+  width: 100%;
+  margin: 12px 0;
+  padding: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: #2563eb;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#start-button:hover {
+  background: #1d4ed8;
+}
+
+.panel .alt {
+  border-top: 1px solid #374151;
+  padding-top: 12px;
+}
+
+.panel .hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
