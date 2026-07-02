@@ -25,6 +25,31 @@ body {
   pointer-events: none;
 }
 
+#camera {
+  z-index: 0;
+}
+
+/* Flat image/video content, warped onto the target by a CSS homography. */
+.planar-content {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+  max-width: none;
+  z-index: 1;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+#gl-canvas {
+  z-index: 2;
+}
+
+#debug-canvas {
+  z-index: 3;
+}
+
 #hud {
   position: fixed;
   left: 0;

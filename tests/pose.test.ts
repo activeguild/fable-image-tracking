@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { matMul3, type Mat3 } from '../src/core/homography';
-import { intrinsicsMatrix, poseFromHomography, type CameraIntrinsics } from '../src/core/pose';
+import {
+  intrinsicsMatrix,
+  orthogonalityDefect,
+  poseFromHomography,
+  type CameraIntrinsics,
+} from '../src/core/pose';
 
 const K: CameraIntrinsics = { fx: 300, fy: 300, cx: 180, cy: 135 };
 
@@ -45,6 +50,22 @@ describe('poseFromHomography', () => {
       m[1] * (m[3] * m[8] - m[5] * m[6]) +
       m[2] * (m[3] * m[7] - m[4] * m[6]);
     expect(det).toBeCloseTo(1, 6);
+  });
+
+  it('orthogonality defect is minimal at the true focal length under tilt', () => {
+    const R = rotationZYX(0.15, -0.45, 0.3); // clearly tilted view
+    const t = [0.02, -0.03, 0.6];
+    const H = homographyFromPose(R, t); // built with the true K (fx = 300)
+
+    const defectAt = (f: number) =>
+      orthogonalityDefect(H, { fx: f, fy: f, cx: K.cx, cy: K.cy });
+
+    expect(defectAt(300)).toBeLessThan(1e-10);
+    expect(defectAt(300)).toBeLessThan(defectAt(230));
+    expect(defectAt(300)).toBeLessThan(defectAt(390));
+    // The defect should decrease monotonically toward the truth.
+    expect(defectAt(270)).toBeLessThan(defectAt(230));
+    expect(defectAt(330)).toBeLessThan(defectAt(390));
   });
 
   it('normalizes scale: lambda-scaled homographies give the same pose', () => {

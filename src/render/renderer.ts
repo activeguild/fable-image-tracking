@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { Pose, CameraIntrinsics } from '../core/pose';
 import { Vector3Filter } from '../core/filter';
+import { computeHomography, matMul3, type Mat3, type Point2 } from '../core/homography';
 
 export type ContentSpec =
   | { type: 'cube' }
@@ -28,7 +29,18 @@ export class ARRenderer {
   private debugGroup = new THREE.Group();
   private spinTarget: THREE.Object3D | null = null;
   private content: ContentSpec = { type: 'cube' };
-  private contentTexture: THREE.Texture | null = null;
+
+  // Planar content: flat media lies exactly on the target plane, so it is
+  // composited as a DOM element warped by the measured homography (CSS
+  // matrix3d). This bypasses the 3-D pose - and therefore any camera
+  // intrinsics error - entirely: the pinning is as accurate as the tracker's
+  // own point measurements.
+  private planarEl: HTMLElement | null = null;
+  private planarMediaW = 1;
+  private planarMediaH = 1;
+  private targetPxW = 0;
+  private targetPxH = 0;
+  private coverRect: { left: number; top: number; width: number; height: number } | null = null;
 
   // One-Euro position filter: low cutoff kills hand-tremor jitter at rest,
   // high beta opens the filter wide as soon as the pose actually moves.
@@ -91,6 +103,60 @@ export class ARRenderer {
     this.rebuildContent();
   }
 
+  /** Compiled target size in pixels: the coordinate frame of tracker corners. */
+  setTargetPixelSize(width: number, height: number): void {
+    this.targetPxW = width;
+    this.targetPxH = height;
+  }
+
+  /**
+   * Pin planar content to the (smoothed, render-time) target corner quad in
+   * processing-frame coordinates. Pass null to hide it.
+   */
+  updatePlanarQuad(cornersProc: Point2[] | null, procW: number, procH: number): void {
+    const el = this.planarEl;
+    if (!el) return;
+    const rect = this.coverRect;
+    if (!cornersProc || !rect || this.targetPxW === 0) {
+      el.style.visibility = 'hidden';
+      return;
+    }
+    const sx = rect.width / procW;
+    const sy = rect.height / procH;
+    const screenCorners = cornersProc.map((p) => ({
+      x: rect.left + p.x * sx,
+      y: rect.top + p.y * sy,
+    }));
+    const targetRect: Point2[] = [
+      { x: 0, y: 0 },
+      { x: this.targetPxW, y: 0 },
+      { x: this.targetPxW, y: this.targetPxH },
+      { x: 0, y: this.targetPxH },
+    ];
+    const targetToScreen = computeHomography(targetRect, screenCorners);
+    if (!targetToScreen) {
+      el.style.visibility = 'hidden';
+      return;
+    }
+    // Contain-fit the media inside the target rectangle, then compose.
+    const fit = Math.min(this.targetPxW / this.planarMediaW, this.targetPxH / this.planarMediaH);
+    const ox = (this.targetPxW - this.planarMediaW * fit) / 2;
+    const oy = (this.targetPxH - this.planarMediaH * fit) / 2;
+    const mediaToTarget: Mat3 = [fit, 0, ox, 0, fit, oy, 0, 0, 1];
+    const h = matMul3(targetToScreen, mediaToTarget);
+    if (Math.abs(h[8]) < 1e-12) {
+      el.style.visibility = 'hidden';
+      return;
+    }
+    for (let i = 0; i < 9; i++) h[i] /= h[8];
+    el.style.transform =
+      `matrix3d(${h[0]},${h[3]},0,${h[6]},` +
+      `${h[1]},${h[4]},0,${h[7]},` +
+      `0,0,1,0,` +
+      `${h[2]},${h[5]},0,1)`;
+    el.style.visibility = 'visible';
+  }
+
   private rebuildDebugHelpers(): void {
     disposeChildren(this.debugGroup);
 
@@ -117,9 +183,9 @@ export class ARRenderer {
   private rebuildContent(): void {
     disposeChildren(this.contentGroup);
     this.spinTarget = null;
-    if (this.contentTexture) {
-      this.contentTexture.dispose();
-      this.contentTexture = null;
+    if (this.planarEl) {
+      this.planarEl.remove();
+      this.planarEl = null;
     }
 
     if (this.content.type === 'cube') {
@@ -134,31 +200,22 @@ export class ARRenderer {
       return;
     }
 
-    // Image / video: an unlit plane fitted inside the target rectangle,
-    // floated a hair above it to avoid z-fighting with the debug plane.
-    let texture: THREE.Texture;
-    let mediaW: number;
-    let mediaH: number;
+    // Image / video: homography-warped DOM element (see updatePlanarQuad).
+    const source = this.content.source;
     if (this.content.type === 'image') {
-      texture = new THREE.Texture(this.content.source);
-      texture.needsUpdate = true;
-      mediaW = this.content.source.width;
-      mediaH = this.content.source.height;
+      this.planarMediaW = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
+      this.planarMediaH = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
     } else {
-      texture = new THREE.VideoTexture(this.content.source);
-      mediaW = this.content.source.videoWidth || 16;
-      mediaH = this.content.source.videoHeight || 9;
+      const vid = source as HTMLVideoElement;
+      this.planarMediaW = vid.videoWidth || 16;
+      this.planarMediaH = vid.videoHeight || 9;
     }
-    texture.colorSpace = THREE.SRGBColorSpace;
-    this.contentTexture = texture;
-
-    const fit = Math.min(this.targetW / mediaW, this.targetH / mediaH);
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(mediaW * fit, mediaH * fit),
-      new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
-    );
-    plane.position.set(0, 0, 0.002);
-    this.contentGroup.add(plane);
+    source.classList.add('planar-content');
+    source.style.width = `${this.planarMediaW}px`;
+    source.style.height = `${this.planarMediaH}px`;
+    source.style.visibility = 'hidden';
+    this.container.appendChild(source);
+    this.planarEl = source;
   }
 
   setVideoSize(width: number, height: number): void {
@@ -247,6 +304,7 @@ export class ARRenderer {
     const h = this.videoHeight * scale;
     const left = (cw - w) / 2;
     const top = (ch - h) / 2;
+    this.coverRect = { left, top, width: w, height: h };
     for (const el of [this.video, this.renderer.domElement, this.debugCanvas]) {
       el.style.position = 'absolute';
       el.style.left = `${left}px`;

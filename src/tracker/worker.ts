@@ -33,6 +33,9 @@ export interface ReadyMessage {
   featureCount: number;
   widthMeters: number;
   heightMeters: number;
+  /** Compiled target size in pixels (the coordinate frame of `corners`). */
+  targetWidthPx: number;
+  targetHeightPx: number;
 }
 
 export interface ResultMessage {
@@ -44,6 +47,8 @@ export interface ResultMessage {
   corners: { x: number; y: number }[] | null;
   points: { x: number; y: number }[];
   inlierCount: number;
+  /** Current (self-calibrated) focal length in processing pixels. */
+  fx: number;
   buffer: ArrayBuffer;
 }
 
@@ -78,6 +83,8 @@ self.onmessage = async (event: MessageEvent<InitMessage | FrameMessage>) => {
       featureCount: target.points.length / 2,
       widthMeters: target.widthMeters,
       heightMeters: target.heightMeters,
+      targetWidthPx: target.width,
+      targetHeightPx: target.height,
     };
     self.postMessage(ready);
     return;
@@ -97,6 +104,7 @@ self.onmessage = async (event: MessageEvent<InitMessage | FrameMessage>) => {
       corners: r.corners,
       points: r.trackedPoints,
       inlierCount: r.inlierCount,
+      fx: tracker.intrinsics.fx,
       buffer: msg.buffer,
     };
     (self as unknown as Worker).postMessage(result, [msg.buffer]);

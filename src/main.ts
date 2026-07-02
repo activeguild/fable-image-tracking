@@ -7,6 +7,7 @@
 
 import { rgbaToGray } from './core/imageops';
 import { PosePredictor } from './core/predictor';
+import { QuadFilter } from './core/quadfilter';
 import { defaultIntrinsics } from './tracker/tracker';
 import type { ReadyMessage, ResultMessage } from './tracker/worker';
 import { ARRenderer } from './render/renderer';
@@ -31,6 +32,7 @@ const contentFile = document.getElementById('content-file') as HTMLInputElement;
 
 const worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
 const predictor = new PosePredictor();
+const quadFilter = new QuadFilter();
 
 let renderer: ARRenderer | null = null;
 let procCanvas: HTMLCanvasElement;
@@ -47,6 +49,7 @@ const bufferPool: ArrayBuffer[] = [];
 
 let lastResult: ResultMessage | null = null;
 let lastFrameTime = 0;
+let lastFx = 1;
 let pendingTargetCanvas: HTMLCanvasElement | null = null;
 
 // FPS accounting: render (rAF) and processing (worker results) separately.
@@ -87,6 +90,7 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
     engineName = msg.engine;
     targetFeatures = msg.featureCount;
     renderer?.setTargetSize(msg.widthMeters, msg.heightMeters);
+    renderer?.setTargetPixelSize(msg.targetWidthPx, msg.targetHeightPx);
     return;
   }
   if (msg.type === 'result') {
@@ -98,6 +102,16 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
       predictor.addSample({ R: msg.pose.R, t: msg.pose.t }, msg.t / 1000);
     } else {
       predictor.clear();
+    }
+    if (msg.corners) {
+      quadFilter.addSample(msg.corners, msg.t / 1000);
+    } else {
+      quadFilter.clear();
+    }
+    // Adopt the worker's self-calibrated focal length for the 3D camera.
+    if (renderer && Math.abs(msg.fx - lastFx) / lastFx > 0.01) {
+      lastFx = msg.fx;
+      renderer.setIntrinsics({ fx: msg.fx, fy: msg.fx, cx: procW / 2, cy: procH / 2 }, procW, procH);
     }
   }
 };
@@ -135,7 +149,9 @@ function setupProcessing(): void {
 
   renderer = new ARRenderer(container, video, glCanvas, debugCanvas);
   renderer.setVideoSize(vw, vh);
-  renderer.setIntrinsics(defaultIntrinsics(procW, procH), procW, procH);
+  const K = defaultIntrinsics(procW, procH);
+  lastFx = K.fx;
+  renderer.setIntrinsics(K, procW, procH);
   renderer.setDebugVisible(debugToggle.checked);
 }
 
@@ -189,8 +205,10 @@ function loop(now: number): void {
   if (workerReady && !workerBusy) captureAndSend(performance.now());
 
   // Render at display rate with the pose extrapolated to "now".
-  const pose = predictor.predict(performance.now() / 1000);
+  const nowSec = performance.now() / 1000;
+  const pose = predictor.predict(nowSec);
   renderer.updatePose(pose, timeSec, dt * 1.2);
+  renderer.updatePlanarQuad(quadFilter.predict(nowSec), procW, procH);
   drawDebug();
 
   renderCount++;

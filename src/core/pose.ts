@@ -72,6 +72,26 @@ export function poseFromHomography(H: Mat3, K: CameraIntrinsics): Pose | null {
   return { R, t: [t[0], t[1], t[2]] };
 }
 
+/**
+ * How badly K^-1 H violates the rotation constraints (columns r1, r2 must be
+ * orthogonal and equal-length). Zero for the true intrinsics under a tilted
+ * view; insensitive (flat) for fronto-parallel views. Used for online focal
+ * self-calibration.
+ */
+export function orthogonalityDefect(H: Mat3, K: CameraIntrinsics): number {
+  const Kinv = invert3(intrinsicsMatrix(K));
+  if (!Kinv) return Infinity;
+  const G = matMul3(Kinv, H);
+  const g1 = [G[0], G[3], G[6]];
+  const g2 = [G[1], G[4], G[7]];
+  const n1 = Math.hypot(g1[0], g1[1], g1[2]);
+  const n2 = Math.hypot(g2[0], g2[1], g2[2]);
+  if (n1 < 1e-12 || n2 < 1e-12) return Infinity;
+  const dot = Math.abs(g1[0] * g2[0] + g1[1] * g2[1] + g1[2] * g2[2]) / (n1 * n2);
+  const aniso = Math.abs(n1 - n2) / ((n1 + n2) / 2);
+  return dot + aniso;
+}
+
 function cross(a: number[], b: number[]): number[] {
   return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }

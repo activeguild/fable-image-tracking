@@ -24,7 +24,7 @@ import {
   type Mat3,
   type Point2,
 } from '../core/homography';
-import { poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
+import { orthogonalityDefect, poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
 import type { CompiledTarget } from './target';
 
 export type TrackerState = 'searching' | 'tracking';
@@ -80,6 +80,7 @@ export class ImageTracker {
   private prevH: Mat3 | null = null; // H of the frame before, for motion prediction
   private frameCounter = 0;
   private planeToFrame: Mat3 | null = null;
+  private readonly initialFocal: number;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -100,6 +101,7 @@ export class ImageTracker {
       minTrackNCC: options.minTrackNCC ?? 0.45,
     };
     this.intrinsics = options.intrinsics ?? defaultIntrinsics(frameWidth, frameHeight);
+    this.initialFocal = this.intrinsics.fx;
   }
 
   /** Process one grayscale frame at the tracker's processing resolution. */
@@ -397,6 +399,34 @@ export class ImageTracker {
     return true;
   }
 
+  /**
+   * Online focal self-calibration: hill-climb the focal length toward the
+   * value that makes K^-1 H closest to a valid rotation. Fronto-parallel
+   * views carry no information (the defect is flat in f), so only step when
+   * the candidates actually separate; the slow EMA keeps it stable.
+   */
+  private calibrateFocal(planeToFrame: Mat3): void {
+    const K = this.intrinsics;
+    const f = K.fx;
+    const candidates = [f, f * 1.02, f / 1.02];
+    const defects = candidates.map((fc) =>
+      orthogonalityDefect(planeToFrame, { fx: fc, fy: fc, cx: K.cx, cy: K.cy })
+    );
+    const spread = Math.max(...defects) - Math.min(...defects);
+    if (!isFinite(spread) || spread < 1e-4) return;
+    let best = 0;
+    if (defects[1] < defects[best]) best = 1;
+    if (defects[2] < defects[best]) best = 2;
+    if (best === 0) return;
+    const target = candidates[best];
+    const fNew = Math.min(
+      this.initialFocal * 1.6,
+      Math.max(this.initialFocal * 0.5, 0.9 * f + 0.1 * target)
+    );
+    K.fx = fNew;
+    K.fy = fNew;
+  }
+
   private buildResult(): TrackerResult {
     if (!this.H) {
       this.planeToFrame = null;
@@ -410,6 +440,7 @@ export class ImageTracker {
       };
     }
     this.planeToFrame = matMul3(this.H, this.target.pixelFromPlane);
+    if (this.state === 'tracking') this.calibrateFocal(this.planeToFrame);
     const pose = poseFromHomography(this.planeToFrame, this.intrinsics);
     return {
       state: this.state,
