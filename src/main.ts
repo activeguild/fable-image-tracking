@@ -97,16 +97,11 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
     bufferPool.push(msg.buffer);
     procCount++;
     lastResult = msg;
-    if (msg.pose) {
-      predictor.addSample({ R: msg.pose.R, t: msg.pose.t }, msg.t / 1000);
-    } else {
-      predictor.clear();
-    }
-    if (msg.corners) {
-      quadFilter.addSample(msg.corners, msg.t / 1000);
-    } else {
-      quadFilter.clear();
-    }
+    // A lost frame does NOT clear the filters: single-frame dropouts (motion
+    // blur, brief occlusion) are bridged by coasting on the last measurement
+    // until it goes stale (maxAge), instead of blinking the content off.
+    if (msg.pose) predictor.addSample({ R: msg.pose.R, t: msg.pose.t }, msg.t / 1000);
+    if (msg.corners) quadFilter.addSample(msg.corners, msg.t / 1000);
     // Adopt the worker's self-calibrated focal length for the 3D camera.
     if (renderer && Math.abs(msg.fx - lastFx) / lastFx > 0.01) {
       lastFx = msg.fx;
@@ -374,6 +369,7 @@ uploadInput.addEventListener('change', () => {
     canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
     if (running) {
       predictor.clear();
+      quadFilter.clear();
       sendInit(canvas);
       statusEl.textContent = 'カスタムターゲットを登録中...';
     } else {
