@@ -25,7 +25,12 @@ import {
   type Point2,
 } from '../core/homography';
 import { orthogonalityDefect, poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
-import { DenseAligner } from '../core/densealign';
+import {
+  DenseAligner,
+  distortPoint,
+  undistortPoint,
+  type RadialDistortion,
+} from '../core/densealign';
 import type { CompiledTarget } from './target';
 
 export type TrackerState = 'searching' | 'tracking';
@@ -85,6 +90,15 @@ export class ImageTracker {
   private readonly aligner: DenseAligner;
   /** Sparse probe points (target px) for photometric validation. */
   private readonly probePoints: Point2[];
+  /**
+   * Radial lens distortion coefficient (Brown k1, normalized units),
+   * self-calibrated photometrically. Geometry (H, pose, fits) lives in ideal
+   * pixel coordinates; observations are undistorted on the way in and
+   * projections distorted on the way out.
+   */
+  private k1 = 0;
+  /** Gyro rotation homography of the previously processed interval. */
+  private prevGyroH: Mat3 | null = null;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -114,13 +128,38 @@ export class ImageTracker {
     }
   }
 
-  /** Process one grayscale frame at the tracker's processing resolution. */
-  processFrame(gray: Uint8Array): TrackerResult {
+  /** Current distortion model (identity when k1 has not been calibrated). */
+  get distortion(): RadialDistortion {
+    return { k1: this.k1, cx: this.intrinsics.cx, cy: this.intrinsics.cy, f: this.intrinsics.fx };
+  }
+
+  /** Observed (distorted) frame point -> ideal point. */
+  private undistort(p: Point2): Point2 {
+    if (this.k1 === 0) return p;
+    const out = { x: 0, y: 0 };
+    undistortPoint(this.distortion, p.x, p.y, out);
+    return out;
+  }
+
+  /** Ideal point -> observed (distorted) frame point. */
+  private distort(p: Point2): Point2 {
+    if (this.k1 === 0) return p;
+    const out = { x: 0, y: 0 };
+    distortPoint(this.distortion, p.x, p.y, out);
+    return out;
+  }
+
+  /**
+   * Process one grayscale frame at the tracker's processing resolution.
+   * `gyroH` is an optional image-space rotation homography measured by the
+   * gyroscope over the interval since the previous frame (ideal pixels).
+   */
+  processFrame(gray: Uint8Array, gyroH: Mat3 | null = null): TrackerResult {
     this.frameCounter++;
     const pyramid = this.kernels.buildPyramid(gray, this.width, this.height, this.opts.framePyramidLevels);
 
     if (this.state === 'tracking' && this.prevPyramid) {
-      this.trackStep(pyramid);
+      this.trackStep(pyramid, gyroH);
       // If tracking just broke (H cleared by lost()), try to re-acquire on
       // this very frame instead of leaving a search-latency gap.
       if (this.H === null) this.detectStep(pyramid);
@@ -128,6 +167,7 @@ export class ImageTracker {
       this.detectStep(pyramid);
     }
 
+    this.prevGyroH = gyroH;
     this.prevPyramid = pyramid;
     return this.buildResult();
   }
@@ -172,11 +212,13 @@ export class ImageTracker {
     if (matches.length < this.opts.minMatches) return;
 
     const src: Point2[] = new Array(matches.length);
-    const dst: Point2[] = new Array(matches.length);
+    const dstRaw: Point2[] = new Array(matches.length); // sensor (distorted) space, for LK
+    const dst: Point2[] = new Array(matches.length); // ideal space, for fitting
     for (let i = 0; i < matches.length; i++) {
       const m = matches[i];
       src[i] = { x: this.target.points[m.a * 2], y: this.target.points[m.a * 2 + 1] };
-      dst[i] = { x: framePts[m.b * 2], y: framePts[m.b * 2 + 1] };
+      dstRaw[i] = { x: framePts[m.b * 2], y: framePts[m.b * 2 + 1] };
+      dst[i] = this.undistort(dstRaw[i]);
     }
 
     const result = ransacHomography(src, dst, {
@@ -189,16 +231,16 @@ export class ImageTracker {
     // Photometric verification: geometry alone can be fooled by repetitive or
     // coincidental structure; the warped appearance must also agree.
     const inlierModel = result.inliers.map((i) => src[i]);
-    const ncc = appearanceNCC(this.target, inlierModel, result.H, pyramid[0]);
+    const ncc = appearanceNCC(this.target, inlierModel, result.H, pyramid[0], 64, this.distortion);
     if (ncc < this.opts.minDetectNCC) return;
 
     // Subpixel dense refinement against the reference texture.
-    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
-    if (refined && this.isPlausible(refined)) result.H = refined;
+    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height, this.distortion);
+    if (refined && this.isPlausible(refined.H)) result.H = refined.H;
 
     this.H = result.H;
     this.prevH = null; // fresh acquisition: no velocity estimate yet
-    this.framePoints = result.inliers.map((i) => dst[i]);
+    this.framePoints = result.inliers.map((i) => dstRaw[i]);
     this.modelPoints = result.inliers.map((i) => src[i]);
     this.capTrackedPoints();
     this.state = 'tracking';
@@ -206,19 +248,38 @@ export class ImageTracker {
 
   // ----------------------------------------------------------------- track
 
-  private trackStep(pyramid: PyramidLevel[]): void {
-    // Constant-velocity prediction: assume the frame-to-frame homography
-    // motion repeats, and warm-start optical flow there. This keeps points
-    // locked on during fast pans that exceed the plain LK search range.
+  private trackStep(pyramid: PyramidLevel[], gyroH: Mat3 | null): void {
+    // Motion prediction for the LK warm start and the fit prior. The visual
+    // constant-velocity model is corrected with the gyroscope when available:
+    // last interval's measured rotation is divided out of the visual motion
+    // (leaving the translation-ish residual) and replaced by the *current*
+    // interval's measured rotation. During fast rotation - exactly when the
+    // image blurs and vision fails - the prior stays accurate.
     let predicted: Point2[] | undefined;
     let prior: Mat3 | null = this.H;
+    let motion: Mat3 | null = null;
     if (this.H && this.prevH) {
       const prevInv = invert3(this.prevH);
       if (prevInv) {
-        const motion = matMul3(this.H, prevInv);
-        predicted = this.framePoints.map((p) => applyHomography(motion, p.x, p.y));
-        prior = matMul3(motion, this.H);
+        motion = matMul3(this.H, prevInv);
+        if (gyroH && this.prevGyroH) {
+          const gPrevInv = invert3(this.prevGyroH);
+          if (gPrevInv) motion = matMul3(gyroH, matMul3(gPrevInv, motion));
+        }
       }
+    } else if (this.H && gyroH) {
+      // First tracked frame after acquisition: no visual velocity yet, but
+      // the gyro already knows the rotation.
+      motion = gyroH;
+    }
+    if (this.H && motion) {
+      const m = motion;
+      // Motion lives in ideal space; LK guesses must be in sensor space.
+      predicted = this.framePoints.map((p) => {
+        const ideal = this.undistort(p);
+        return this.distort(applyHomography(m, ideal.x, ideal.y));
+      });
+      prior = matMul3(m, this.H);
     }
 
     const flows = this.kernels.trackPyrLK(this.prevPyramid!, pyramid, this.framePoints, {
@@ -264,14 +325,17 @@ export class ImageTracker {
       return;
     }
 
+    // Fit in ideal (undistorted) coordinates.
+    const nextIdeal = nextFrame.map((p) => this.undistort(p));
+
     // Deterministic prior-guided fit first: RANSAC's random minimal samples
     // make the estimate wobble frame to frame even on a static scene, which
     // shows up as visible jitter. With last frame's H (advanced by the motion
     // model) as a prior, gating + iterated least squares is stable and cheap.
     // Full RANSAC remains as the fallback when the prior is way off.
-    let result = prior ? this.fitGuided(nextModel, nextFrame, prior) : null;
+    let result = prior ? this.fitGuided(nextModel, nextIdeal, prior) : null;
     if (!result) {
-      result = ransacHomography(nextModel, nextFrame, {
+      result = ransacHomography(nextModel, nextIdeal, {
         threshold: this.opts.ransacThreshold,
         maxIterations: 150,
       });
@@ -284,7 +348,14 @@ export class ImageTracker {
     // Photometric verification every frame: kills stale poses quickly when
     // the target disappears, is occluded, or motion blur wipes the texture,
     // instead of letting optical flow limp along on wrong content.
-    const ncc = appearanceNCC(this.target, result.inliers.map((i) => nextModel[i]), result.H, pyramid[0]);
+    const ncc = appearanceNCC(
+      this.target,
+      result.inliers.map((i) => nextModel[i]),
+      result.H,
+      pyramid[0],
+      64,
+      this.distortion
+    );
     if (ncc < this.opts.minTrackNCC) {
       this.lost();
       return;
@@ -293,8 +364,11 @@ export class ImageTracker {
     // Dense subpixel refinement: point-based estimates carry per-corner LK
     // noise; aligning the whole reference texture against the frame removes
     // the residual sub-pixel swimming.
-    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height);
-    if (refined && this.isPlausible(refined)) result.H = refined;
+    const refined = this.aligner.align(result.H, pyramid[0].data, this.width, this.height, this.distortion);
+    if (refined && this.isPlausible(refined.H)) {
+      result.H = refined.H;
+      this.maybeCalibrateDistortion(refined.H, refined.err, pyramid);
+    }
 
     this.prevH = this.H;
     this.H = result.H;
@@ -302,6 +376,38 @@ export class ImageTracker {
     this.modelPoints = result.inliers.map((i) => nextModel[i]);
 
     if (this.framePoints.length < this.opts.replenishBelow) this.replenish();
+  }
+
+  /**
+   * Photometric self-calibration of radial distortion: try k1 one step up
+   * and down; whichever makes the dense alignment residual smaller wins.
+   * Only observable when the target reaches the frame periphery (the k1 r^2
+   * term vanishes near the principal point), so gate on corner radius.
+   */
+  private maybeCalibrateDistortion(H: Mat3, currentErr: number, pyramid: PyramidLevel[]): void {
+    if (this.frameCounter % 4 !== 0) return;
+    const K = this.intrinsics;
+    const corners = projectCorners(H, this.target.width, this.target.height);
+    let rMax = 0;
+    for (const c of corners) {
+      rMax = Math.max(rMax, Math.hypot((c.x - K.cx) / K.fx, (c.y - K.cy) / K.fx));
+    }
+    if (rMax < 0.5) return;
+
+    const step = 0.02;
+    let bestK = this.k1;
+    let bestErr = currentErr;
+    for (const k of [this.k1 + step, this.k1 - step]) {
+      const d: RadialDistortion = { k1: k, cx: K.cx, cy: K.cy, f: K.fx };
+      const r = this.aligner.align(H, pyramid[0].data, this.width, this.height, d);
+      if (r && r.err < bestErr * 0.995) {
+        bestErr = r.err;
+        bestK = k;
+      }
+    }
+    if (bestK !== this.k1) {
+      this.k1 = Math.min(0.15, Math.max(-0.35, this.k1 + 0.25 * (bestK - this.k1)));
+    }
   }
 
   /**
@@ -313,13 +419,13 @@ export class ImageTracker {
    */
   private denseRescue(prior: Mat3 | null, pyramid: PyramidLevel[]): boolean {
     if (!prior) return false;
-    const refined = this.aligner.align(prior, pyramid[0].data, this.width, this.height);
-    if (!refined || !this.isPlausible(refined)) return false;
-    const ncc = appearanceNCC(this.target, this.probePoints, refined, pyramid[0]);
+    const refined = this.aligner.align(prior, pyramid[0].data, this.width, this.height, this.distortion);
+    if (!refined || !this.isPlausible(refined.H)) return false;
+    const ncc = appearanceNCC(this.target, this.probePoints, refined.H, pyramid[0], 64, this.distortion);
     if (ncc < this.opts.minTrackNCC) return false;
 
     this.prevH = this.H;
-    this.H = refined;
+    this.H = refined.H;
     // Re-seed the point set from the model so LK can resume next frame.
     this.framePoints = [];
     this.modelPoints = [];
@@ -372,7 +478,8 @@ export class ImageTracker {
       const my = pts[i * 2 + 1];
       const key = `${mx.toFixed(1)},${my.toFixed(1)}`;
       if (existing.has(key)) continue;
-      const p = applyHomography(this.H, mx, my);
+      // Project through H (ideal space), then into sensor space for LK.
+      const p = this.distort(applyHomography(this.H, mx, my));
       if (p.x < margin || p.y < margin || p.x >= this.width - margin || p.y >= this.height - margin) {
         continue;
       }
@@ -491,7 +598,11 @@ export class ImageTracker {
       pose,
       inlierCount: this.framePoints.length,
       trackedPoints: this.framePoints.slice(),
-      corners: projectCorners(this.H, this.target.width, this.target.height),
+      // Corners go to the renderer, which composites over the real (distorted)
+      // camera image - so project in ideal space, then distort.
+      corners: projectCorners(this.H, this.target.width, this.target.height).map((c) =>
+        this.distort(c)
+      ),
     };
   }
 }
@@ -517,18 +628,25 @@ export function appearanceNCC(
   modelPoints: Point2[],
   H: Mat3,
   frame: { data: Uint8Array; width: number; height: number },
-  maxSamples = 64
+  maxSamples = 64,
+  distortion?: RadialDistortion
 ): number {
   const n = modelPoints.length;
   if (n === 0) return -1;
   const stride = Math.max(1, Math.floor(n / maxSamples));
+  const useDist = distortion !== undefined && distortion.k1 !== 0;
+  const dpt = { x: 0, y: 0 };
 
   const tVals: number[] = [];
   const fVals: number[] = [];
   for (let i = 0; i < n; i += stride) {
     const mp = modelPoints[i];
     if (mp.x < 0 || mp.y < 0 || mp.x > target.width - 1 || mp.y > target.height - 1) continue;
-    const p = applyHomography(H, mp.x, mp.y);
+    let p = applyHomography(H, mp.x, mp.y);
+    if (useDist) {
+      distortPoint(distortion!, p.x, p.y, dpt);
+      p = dpt;
+    }
     if (p.x < 1 || p.y < 1 || p.x > frame.width - 2 || p.y > frame.height - 2) continue;
     tVals.push(sampleBilinear(target.gray, target.width, target.height, mp.x, mp.y));
     fVals.push(sampleBilinear(frame.data, frame.width, frame.height, p.x, p.y));

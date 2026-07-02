@@ -13,6 +13,7 @@ import type { ReadyMessage, ResultMessage } from './tracker/worker';
 import { ARRenderer } from './render/renderer';
 import { createSampleTargetCanvas } from './sampleTarget';
 import { createSampleImageCanvas, sampleVideoUrl } from './sampleContent';
+import { GyroCollector } from './gyro';
 
 const PROC_WIDTH = 360; // processing resolution (width); height follows aspect
 const TARGET_COMPILE_SIZE = 384;
@@ -32,6 +33,9 @@ const contentSelect = document.getElementById('content-select') as HTMLSelectEle
 const worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
 const predictor = new PosePredictor();
 const quadFilter = new QuadFilter();
+const gyro = new GyroCollector();
+let gyroOn = false;
+let lastCaptureMs = 0;
 
 let renderer: ARRenderer | null = null;
 let procCanvas: HTMLCanvasElement;
@@ -156,7 +160,9 @@ function captureAndSend(nowMs: number): void {
   const buffer = bufferPool.pop() ?? new ArrayBuffer(procW * procH);
   const gray = new Uint8Array(buffer);
   rgbaToGray(rgba, procW, procH, gray);
-  worker.postMessage({ type: 'frame', buffer, t: nowMs }, [buffer]);
+  const gyroDelta = gyroOn && lastCaptureMs > 0 ? gyro.delta(lastCaptureMs, nowMs) : null;
+  lastCaptureMs = nowMs;
+  worker.postMessage({ type: 'frame', buffer, t: nowMs, gyro: gyroDelta }, [buffer]);
   workerBusy = true;
 }
 
@@ -183,9 +189,10 @@ function drawDebug(): void {
 function updateStatus(): void {
   const state = lastResult?.state === 'tracking' ? 'トラッキング中' : 'ターゲット検索中';
   const inliers = lastResult?.inlierCount ?? 0;
+  const calib = lastResult ? ` | f:${lastResult.fx.toFixed(0)} k1:${lastResult.k1.toFixed(3)}` : '';
   statusEl.textContent =
     `${state} | 追跡点: ${inliers} | 描画 ${renderFps.toFixed(0)} fps / 処理 ${procFps.toFixed(0)} fps\n` +
-    `エンジン: ${engineName} | ターゲット特徴点: ${targetFeatures}`;
+    `エンジン: ${engineName} | IMU: ${gyroOn ? 'on' : 'off'} | 特徴点: ${targetFeatures}${calib}`;
 }
 
 function loop(now: number): void {
@@ -223,7 +230,12 @@ async function start(): Promise<void> {
   startButton.disabled = true;
   statusEl.textContent = 'カメラ起動中...';
   try {
+    // Motion permission must be requested inside the click gesture (iOS).
+    const gyroPromise = gyro.start().then((ok) => {
+      gyroOn = ok;
+    });
     await startCamera();
+    await gyroPromise;
     setupProcessing();
     sendInit(pendingTargetCanvas ?? createSampleTargetCanvas(TARGET_COMPILE_SIZE));
     startOverlay.classList.add('hidden');
