@@ -99,6 +99,11 @@ export class ImageTracker {
   private k1 = 0;
   /** Gyro rotation homography of the previously processed interval. */
   private prevGyroH: Mat3 | null = null;
+  // Calibration hysteresis: apply a step only after consecutive evaluations
+  // agree on the direction, so measurement noise cannot random-walk f/k1
+  // (they are weakly coupled and would otherwise co-drift).
+  private focalStreak = 0;
+  private k1Streak = 0;
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -385,14 +390,15 @@ export class ImageTracker {
    * term vanishes near the principal point), so gate on corner radius.
    */
   private maybeCalibrateDistortion(H: Mat3, currentErr: number, pyramid: PyramidLevel[]): void {
-    if (this.frameCounter % 4 !== 0) return;
+    // Offset cadence from the focal calibration (never both in one frame).
+    if (this.frameCounter % 8 !== 4) return;
     const K = this.intrinsics;
     const corners = projectCorners(H, this.target.width, this.target.height);
     let rMax = 0;
     for (const c of corners) {
       rMax = Math.max(rMax, Math.hypot((c.x - K.cx) / K.fx, (c.y - K.cy) / K.fx));
     }
-    if (rMax < 0.5) return;
+    if (rMax < 0.6) return; // k1 is unobservable away from the periphery
 
     const step = 0.02;
     let bestK = this.k1;
@@ -400,14 +406,21 @@ export class ImageTracker {
     for (const k of [this.k1 + step, this.k1 - step]) {
       const d: RadialDistortion = { k1: k, cx: K.cx, cy: K.cy, f: K.fx };
       const r = this.aligner.align(H, pyramid[0].data, this.width, this.height, d);
-      if (r && r.err < bestErr * 0.995) {
+      // Demand a clear (1.5%) improvement so noise cannot cast votes.
+      if (r && r.err < bestErr * 0.985) {
         bestErr = r.err;
         bestK = k;
       }
     }
-    if (bestK !== this.k1) {
-      this.k1 = Math.min(0.15, Math.max(-0.35, this.k1 + 0.25 * (bestK - this.k1)));
+    if (bestK === this.k1) {
+      this.k1Streak = 0;
+      return;
     }
+    const dir = bestK > this.k1 ? 1 : -1;
+    this.k1Streak = Math.sign(this.k1Streak) === dir ? this.k1Streak + dir : dir;
+    if (Math.abs(this.k1Streak) < 2) return;
+    // Physically plausible range for phone cameras (ISPs pre-correct most of it).
+    this.k1 = Math.min(0.08, Math.max(-0.15, this.k1 + dir * step * 0.5));
   }
 
   /**
@@ -556,6 +569,8 @@ export class ImageTracker {
    * the candidates actually separate; the slow EMA keeps it stable.
    */
   private calibrateFocal(planeToFrame: Mat3): void {
+    // Decoupled cadence from the k1 calibration (never both in one frame).
+    if (this.frameCounter % 8 !== 0) return;
     const K = this.intrinsics;
     const f = K.fx;
     const candidates = [f, f * 1.02, f / 1.02];
@@ -563,15 +578,25 @@ export class ImageTracker {
       orthogonalityDefect(planeToFrame, { fx: fc, fy: fc, cx: K.cx, cy: K.cy })
     );
     const spread = Math.max(...defects) - Math.min(...defects);
-    if (!isFinite(spread) || spread < 1e-4) return;
+    if (!isFinite(spread) || spread < 3e-4) {
+      this.focalStreak = 0;
+      return;
+    }
     let best = 0;
     if (defects[1] < defects[best]) best = 1;
     if (defects[2] < defects[best]) best = 2;
-    if (best === 0) return;
+    if (best === 0) {
+      this.focalStreak = 0;
+      return;
+    }
+    const dir = best === 1 ? 1 : -1;
+    this.focalStreak = Math.sign(this.focalStreak) === dir ? this.focalStreak + dir : dir;
+    if (Math.abs(this.focalStreak) < 2) return;
+
     const target = candidates[best];
     const fNew = Math.min(
       this.initialFocal * 1.6,
-      Math.max(this.initialFocal * 0.5, 0.9 * f + 0.1 * target)
+      Math.max(this.initialFocal * 0.6, 0.85 * f + 0.15 * target)
     );
     K.fx = fNew;
     K.fy = fNew;

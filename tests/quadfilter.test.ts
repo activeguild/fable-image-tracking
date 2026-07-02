@@ -42,6 +42,38 @@ describe('QuadFilter', () => {
     expect(f.predict(10.4)).toBeNull(); // past maxAge
   });
 
+  it('an external motion model removes reversal overshoot', () => {
+    // Hand motion: +100 px/s until t=10.04, then it reverses to -100 px/s.
+    // Constant velocity overshoots; the measured model does not.
+    const velocity = (t: number) => (t < 10.04 ? 100 : -100);
+    const displacement = (from: number, to: number) => {
+      // integrate the piecewise velocity
+      let d = 0;
+      const mid = 10.04;
+      if (to <= mid || from >= mid) return velocity(from) * (to - from);
+      d += velocity(from) * (mid - from);
+      d += velocity(mid) * (to - mid);
+      return d;
+    };
+    const advance = (corners: { x: number; y: number }[], fromSec: number, toSec: number) =>
+      corners.map((c) => ({ x: c.x + displacement(fromSec, toSec), y: c.y }));
+
+    const unfiltered = { minCutoff: 1000, beta: 1000 };
+    const plain = new QuadFilter(unfiltered);
+    const fused = new QuadFilter(unfiltered);
+    plain.addSample(quad(0), 10.0);
+    plain.addSample(quad(4), 10.04);
+    fused.addSample(quad(0), 10.0);
+    fused.addSample(quad(4), 10.04);
+
+    // Truth at 10.08: reversed motion brings x back to 0.
+    const overshoot = plain.predict(10.08)!;
+    expect(overshoot[0].x).toBeCloseTo(10 + 8, 1); // constant velocity keeps going
+
+    const corrected = fused.predict(10.08, advance)!;
+    expect(corrected[0].x).toBeCloseTo(10 + 0, 1); // model followed the reversal
+  });
+
   it('clears cleanly', () => {
     const f = new QuadFilter();
     f.addSample(quad(0), 10.0);
