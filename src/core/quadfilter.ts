@@ -47,12 +47,24 @@ export class QuadFilter {
     this.filters = Array.from({ length: 8 }, () => new OneEuroFilter(minCutoff, beta, 1.0));
   }
 
+  private rejections = 0;
+
   addSample(corners: Point2[], timeSec: number): void {
     const c = new Array<number>(8);
     for (let i = 0; i < 4; i++) {
       c[i * 2] = corners[i].x;
       c[i * 2 + 1] = corners[i].y;
     }
+    // Admission control: a quad whose shape differs wildly from a sample
+    // taken a few frames ago is a measurement glitch (no real motion changes
+    // shape that fast). Skip it (coast) - unless it persists, then accept it
+    // as a genuine change so we can never lock out real measurements.
+    const s1 = this.s1;
+    if (s1 && timeSec - s1.t < 0.15 && !shapeConsistent(c, s1.c, 0.25)) {
+      this.rejections++;
+      if (this.rejections <= 2) return;
+    }
+    this.rejections = 0;
     this.s0 = this.s1;
     this.s1 = { t: timeSec, c };
   }
