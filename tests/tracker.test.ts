@@ -126,6 +126,26 @@ describe('ImageTracker end-to-end', () => {
     }
   });
 
+  it('keeps the lock while the target recedes far from the camera', () => {
+    const tracker = new ImageTracker(compiled, FRAME_W, FRAME_H, { detectEveryN: 1 });
+
+    // Acquire close up, then back away: the target shrinks from ~140 px to
+    // ~48 px on screen. FAST corners starve at small scales, so this only
+    // survives thanks to the dense-alignment rescue path.
+    let scale = 0.55;
+    const r0 = tracker.processFrame(renderFrame(targetImg, similarity(scale, 0.1, 180, 135)));
+    expect(r0.state).toBe('tracking');
+
+    for (let f = 0; f < 14; f++) {
+      scale *= 0.92;
+      const H = similarity(scale, 0.1, 180, 135);
+      const r = tracker.processFrame(renderFrame(targetImg, H));
+      expect(r.state, `frame ${f} (scale ${scale.toFixed(2)})`).toBe('tracking');
+      expect(maxCornerError(r.H!, H), `frame ${f}`).toBeLessThan(4);
+    }
+    expect(scale * TARGET_SIZE).toBeLessThan(50); // ended up genuinely tiny
+  });
+
   it('scores appearance high for the true homography and low for a wrong one', () => {
     const H = similarity(0.6, 0.2, 160, 120);
     const frame = { data: renderFrame(targetImg, H), width: FRAME_W, height: FRAME_H };

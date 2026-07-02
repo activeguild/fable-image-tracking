@@ -83,6 +83,8 @@ export class ImageTracker {
   private planeToFrame: Mat3 | null = null;
   private readonly initialFocal: number;
   private readonly aligner: DenseAligner;
+  /** Sparse probe points (target px) for photometric validation. */
+  private readonly probePoints: Point2[];
 
   constructor(target: CompiledTarget, frameWidth: number, frameHeight: number, options: TrackerOptions = {}) {
     this.target = target;
@@ -105,6 +107,11 @@ export class ImageTracker {
     this.intrinsics = options.intrinsics ?? defaultIntrinsics(frameWidth, frameHeight);
     this.initialFocal = this.intrinsics.fx;
     this.aligner = new DenseAligner(target.gray, target.width, target.height);
+    this.probePoints = [];
+    const stride = Math.max(1, Math.floor(target.points.length / 2 / 128));
+    for (let i = 0; i < target.points.length / 2; i += stride) {
+      this.probePoints.push({ x: target.points[i * 2], y: target.points[i * 2 + 1] });
+    }
   }
 
   /** Process one grayscale frame at the tracker's processing resolution. */
@@ -253,7 +260,7 @@ export class ImageTracker {
     }
 
     if (nextFrame.length < this.opts.minInliers) {
-      this.lost();
+      if (!this.denseRescue(prior, pyramid)) this.lost();
       return;
     }
 
@@ -270,7 +277,7 @@ export class ImageTracker {
       });
     }
     if (!result || result.inliers.length < this.opts.minInliers || !this.isPlausible(result.H)) {
-      this.lost();
+      if (!this.denseRescue(prior, pyramid)) this.lost();
       return;
     }
 
@@ -295,6 +302,29 @@ export class ImageTracker {
     this.modelPoints = result.inliers.map((i) => nextModel[i]);
 
     if (this.framePoints.length < this.opts.replenishBelow) this.replenish();
+  }
+
+  /**
+   * Keep tracking through corner starvation with dense alignment alone.
+   * When the target recedes, FAST corners die out long before the texture
+   * does; aligning the reference against the frame from the motion prior
+   * needs no corners at all, so the lock survives (validated by NCC every
+   * frame, so this is genuine measurement, not blind coasting).
+   */
+  private denseRescue(prior: Mat3 | null, pyramid: PyramidLevel[]): boolean {
+    if (!prior) return false;
+    const refined = this.aligner.align(prior, pyramid[0].data, this.width, this.height);
+    if (!refined || !this.isPlausible(refined)) return false;
+    const ncc = appearanceNCC(this.target, this.probePoints, refined, pyramid[0]);
+    if (ncc < this.opts.minTrackNCC) return false;
+
+    this.prevH = this.H;
+    this.H = refined;
+    // Re-seed the point set from the model so LK can resume next frame.
+    this.framePoints = [];
+    this.modelPoints = [];
+    this.replenish();
+    return true;
   }
 
   /**
