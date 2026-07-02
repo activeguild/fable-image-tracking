@@ -14,6 +14,8 @@ import { ARRenderer } from './render/renderer';
 import { createSampleTargetCanvas } from './sampleTarget';
 import { createSampleImageCanvas, sampleVideoUrl } from './sampleContent';
 import { GyroCollector } from './gyro';
+import { gyroHomography } from './core/imu';
+import { applyHomography, type Point2 } from './core/homography';
 
 const PROC_WIDTH = 360; // processing resolution (width); height follows aspect
 const TARGET_COMPILE_SIZE = 384;
@@ -166,6 +168,22 @@ function captureAndSend(nowMs: number): void {
   workerBusy = true;
 }
 
+/**
+ * Gyro-measured motion model for display-time quad prediction: rotate the
+ * quad by the camera rotation actually measured between the two timestamps
+ * instead of assuming constant velocity - no overshoot when the hand
+ * reverses direction, and coasting stays glued during dropouts.
+ */
+function quadAdvance(corners: Point2[], fromSec: number, toSec: number): Point2[] {
+  if (!gyroOn || !lastResult) return corners;
+  const delta = gyro.delta(fromSec * 1000, toSec * 1000);
+  if (!delta) return corners;
+  const K = { fx: lastResult.fx, fy: lastResult.fx, cx: procW / 2, cy: procH / 2 };
+  const Hg = gyroHomography(delta, K);
+  if (!Hg) return corners;
+  return corners.map((c) => applyHomography(Hg, c.x, c.y));
+}
+
 function drawDebug(): void {
   const ctx = debugCanvas.getContext('2d')!;
   ctx.clearRect(0, 0, procW, procH);
@@ -211,7 +229,7 @@ function loop(now: number): void {
   const displaySec = performance.now() / 1000 + Math.min(dt, 0.034);
   const pose = predictor.predict(displaySec);
   renderer.updatePose(pose, timeSec, dt * 1.2);
-  renderer.updatePlanarQuad(quadFilter.predict(displaySec), procW, procH);
+  renderer.updatePlanarQuad(quadFilter.predict(displaySec, quadAdvance), procW, procH);
   drawDebug();
 
   renderCount++;

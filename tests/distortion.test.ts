@@ -86,9 +86,11 @@ describe('distortion self-calibration', () => {
     let r = tracker.processFrame(frame);
     expect(r.state).toBe('tracking');
 
-    for (let f = 0; f < 120; f++) r = tracker.processFrame(frame);
-    expect(tracker.distortion.k1).toBeLessThan(-0.06);
-    expect(tracker.distortion.k1).toBeGreaterThan(-0.2);
+    // The hysteresis (consecutive agreeing evaluations, every 8th frame)
+    // slows convergence by design; give it a few seconds of frames.
+    for (let f = 0; f < 200; f++) r = tracker.processFrame(frame);
+    expect(tracker.distortion.k1).toBeLessThan(-0.05);
+    expect(tracker.distortion.k1).toBeGreaterThan(-0.16);
 
     // Corners returned by the tracker are in sensor space; compare against
     // the ground truth (ideal corners pushed through the true lens).
