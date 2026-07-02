@@ -65,7 +65,7 @@ export function distortPoint(
   out.y = d.cy + ny * s * d.f;
 }
 
-/** Observed (distorted) pixel -> ideal (undistorted) pixel (fixed-point). */
+/** Observed (distorted) pixel -> ideal (undistorted) pixel (Newton on radius). */
 export function undistortPoint(
   d: RadialDistortion,
   x: number,
@@ -74,15 +74,23 @@ export function undistortPoint(
 ): void {
   const dx = (x - d.cx) / d.f;
   const dy = (y - d.cy) / d.f;
-  let nx = dx;
-  let ny = dy;
-  for (let i = 0; i < 4; i++) {
-    const s = 1 + d.k1 * (nx * nx + ny * ny);
-    nx = dx / s;
-    ny = dy / s;
+  const rd = Math.hypot(dx, dy);
+  if (rd < 1e-12) {
+    out.x = x;
+    out.y = y;
+    return;
   }
-  out.x = d.cx + nx * d.f;
-  out.y = d.cy + ny * d.f;
+  // Solve r * (1 + k1 r^2) = rd for the ideal radius r.
+  let r = rd;
+  for (let i = 0; i < 6; i++) {
+    const f = r * (1 + d.k1 * r * r) - rd;
+    const df = 1 + 3 * d.k1 * r * r;
+    if (Math.abs(df) < 1e-9) break;
+    r -= f / df;
+  }
+  const scale = r / rd;
+  out.x = d.cx + dx * scale * d.f;
+  out.y = d.cy + dy * scale * d.f;
 }
 
 export class DenseAligner {

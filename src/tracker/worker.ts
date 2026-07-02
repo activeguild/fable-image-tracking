@@ -49,6 +49,8 @@ export interface ResultMessage {
   inlierCount: number;
   /** Current (self-calibrated) focal length in processing pixels. */
   fx: number;
+  /** Current (self-calibrated) radial distortion coefficient. */
+  k1: number;
   buffer: ArrayBuffer;
 }
 
@@ -105,6 +107,7 @@ self.onmessage = async (event: MessageEvent<InitMessage | FrameMessage>) => {
       points: r.trackedPoints,
       inlierCount: r.inlierCount,
       fx: tracker.intrinsics.fx,
+      k1: tracker.distortion.k1,
       buffer: msg.buffer,
     };
     (self as unknown as Worker).postMessage(result, [msg.buffer]);

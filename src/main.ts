@@ -183,9 +183,10 @@ function drawDebug(): void {
 function updateStatus(): void {
   const state = lastResult?.state === 'tracking' ? 'トラッキング中' : 'ターゲット検索中';
   const inliers = lastResult?.inlierCount ?? 0;
+  const calib = lastResult ? ` | f:${lastResult.fx.toFixed(0)} k1:${lastResult.k1.toFixed(3)}` : '';
   statusEl.textContent =
     `${state} | 追跡点: ${inliers} | 描画 ${renderFps.toFixed(0)} fps / 処理 ${procFps.toFixed(0)} fps\n` +
-    `エンジン: ${engineName} | ターゲット特徴点: ${targetFeatures}`;
+    `エンジン: ${engineName} | ターゲット特徴点: ${targetFeatures}${calib}`;
 }
 
 function loop(now: number): void {
