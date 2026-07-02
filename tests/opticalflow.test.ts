@@ -88,6 +88,35 @@ describe('trackPyrLK', () => {
     expect(warmGood.length).toBeGreaterThan(coldGood.length);
   });
 
+  it('is invariant to exposure changes between frames', () => {
+    const w = 200;
+    const h = 160;
+    const dx = 3.2;
+    const dy = -2.1;
+    const img = randomTexture(w, h, 31, 5);
+    const moved = shiftImage(img, w, h, dx, dy);
+    // Simulate an auto-exposure swing: gain 0.7, bias +25.
+    const darker = new Uint8Array(moved.length);
+    for (let i = 0; i < moved.length; i++) {
+      darker[i] = Math.min(255, Math.max(0, moved[i] * 0.7 + 25)) | 0;
+    }
+
+    const prevPyr = buildPyramid(img, w, h, 3);
+    const nextPyr = buildPyramid(darker, w, h, 3);
+    const points = [];
+    for (let y = 30; y <= 130; y += 25) {
+      for (let x = 30; x <= 170; x += 30) points.push({ x, y });
+    }
+    const flows = trackPyrLK(prevPyr, nextPyr, points);
+    let tracked = 0;
+    for (let i = 0; i < points.length; i++) {
+      if (!flows[i].ok) continue;
+      tracked++;
+      expect(Math.hypot(flows[i].x - points[i].x - dx, flows[i].y - points[i].y - dy)).toBeLessThan(1.2);
+    }
+    expect(tracked).toBeGreaterThan(points.length * 0.7);
+  });
+
   it('flags untrackable (flat) regions', () => {
     const w = 128;
     const h = 128;

@@ -391,6 +391,7 @@ export function matchDesc(
 const LK_TPL = memory.data(1600); // f32 window buffers (up to 20x20)
 const LK_GX = memory.data(1600);
 const LK_GY = memory.data(1600);
+const LK_CUR = memory.data(1600);
 
 /**
  * One pyramid level of Bouguet-style LK for all points (mirror of the level
@@ -434,6 +435,7 @@ export function lkLevel(
       let sxx: f64 = 0;
       let sxy: f64 = 0;
       let syy: f64 = 0;
+      let meanT: f64 = 0;
       let idx = 0;
       for (let dy = -windowRadius; dy <= windowRadius; dy++) {
         for (let dx = -windowRadius; dx <= windowRadius; dx++) {
@@ -445,6 +447,7 @@ export function lkLevel(
           const gyv: f64 =
             (sampleBil(prevPtr, pw, ph, x, y + 1) - sampleBil(prevPtr, pw, ph, x, y - 1)) * 0.5;
           store<f32>(LK_TPL + (idx << 2), <f32>tv);
+          meanT += tv;
           store<f32>(LK_GX + (idx << 2), <f32>gxv);
           store<f32>(LK_GY + (idx << 2), <f32>gyv);
           sxx += gxv * gxv;
@@ -453,6 +456,7 @@ export function lkLevel(
           idx++;
         }
       }
+      meanT /= <f64>winArea;
 
       const det: f64 = sxx * syy - sxy * sxy;
       if (det >= 1e-4) {
@@ -463,20 +467,28 @@ export function lkLevel(
           if (qx < margin || qy < margin || qx >= <f64>nw - margin || qy >= <f64>nh - margin) {
             break;
           }
-          let bx: f64 = 0;
-          let by: f64 = 0;
-          let absSum: f64 = 0;
+          // Zero-mean matching for exposure invariance (mirrors the TS kernel).
+          let meanI: f64 = 0;
           idx = 0;
           for (let dy = -windowRadius; dy <= windowRadius; dy++) {
             for (let dx = -windowRadius; dx <= windowRadius; dx++) {
-              const dI: f64 =
-                sampleBil(nextPtr, nw, nh, qx + <f64>dx, qy + <f64>dy) -
-                <f64>load<f32>(LK_TPL + (idx << 2));
-              bx += dI * <f64>load<f32>(LK_GX + (idx << 2));
-              by += dI * <f64>load<f32>(LK_GY + (idx << 2));
-              absSum += Math.abs(dI);
+              const cv: f64 = sampleBil(nextPtr, nw, nh, qx + <f64>dx, qy + <f64>dy);
+              store<f32>(LK_CUR + (idx << 2), <f32>cv);
+              meanI += cv;
               idx++;
             }
+          }
+          meanI /= <f64>winArea;
+          let bx: f64 = 0;
+          let by: f64 = 0;
+          let absSum: f64 = 0;
+          for (idx = 0; idx < winArea; idx++) {
+            const dI: f64 =
+              (<f64>load<f32>(LK_CUR + (idx << 2)) - meanI) -
+              (<f64>load<f32>(LK_TPL + (idx << 2)) - meanT);
+            bx += dI * <f64>load<f32>(LK_GX + (idx << 2));
+            by += dI * <f64>load<f32>(LK_GY + (idx << 2));
+            absSum += Math.abs(dI);
           }
           err = absSum / <f64>winArea;
           const dxStep: f64 = (-bx * syy + by * sxy) * invDet;
