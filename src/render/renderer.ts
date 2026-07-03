@@ -1,9 +1,11 @@
 /**
- * Three.js overlay renderer. The camera background is the live <video>
- * element rendered at display rate; alignment with the (slightly older)
- * tracker output is restored by extrapolating poses to the render timestamp
- * (see core/predictor.ts). A transparent WebGL canvas is layered on top with
- * a camera whose projection matches the tracker's pinhole intrinsics.
+ * Three.js overlay renderer. The camera background is frame-synchronized:
+ * the <video> element stays hidden and the visible image is drawn onto a
+ * canvas by the app exactly when the tracker result for that frame arrives
+ * (see main.ts), so overlay and camera pixels always belong to the same
+ * moment - prediction error can never appear as marker slip. A transparent
+ * WebGL canvas is layered on top with a camera whose projection matches the
+ * tracker's pinhole intrinsics.
  *
  * Anchor children are split into user content (cube / image / video) and the
  * debug registration helpers (target outline, translucent plane, axes) that
@@ -58,12 +60,16 @@ export class ARRenderer {
   private targetW = 0.2;
   private targetH = 0.2;
 
+  private camCtx: CanvasRenderingContext2D;
+
   constructor(
     private container: HTMLElement,
     private video: HTMLVideoElement,
+    private camCanvas: HTMLCanvasElement,
     canvas: HTMLCanvasElement,
     private debugCanvas: HTMLCanvasElement
   ) {
+    this.camCtx = camCanvas.getContext('2d')!;
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.01, 100);
@@ -230,7 +236,14 @@ export class ARRenderer {
   setVideoSize(width: number, height: number): void {
     this.videoWidth = width;
     this.videoHeight = height;
+    this.camCanvas.width = width;
+    this.camCanvas.height = height;
     this.layout();
+  }
+
+  /** Blit a camera frame (live video or a buffered processed frame). */
+  drawCameraFrame(source: CanvasImageSource): void {
+    this.camCtx.drawImage(source, 0, 0, this.videoWidth, this.videoHeight);
   }
 
   /** Match the virtual camera to the tracker's pinhole intrinsics. */
@@ -314,7 +327,7 @@ export class ARRenderer {
     const left = (cw - w) / 2;
     const top = (ch - h) / 2;
     this.coverRect = { left, top, width: w, height: h };
-    for (const el of [this.video, this.renderer.domElement, this.debugCanvas]) {
+    for (const el of [this.video, this.camCanvas, this.renderer.domElement, this.debugCanvas]) {
       el.style.position = 'absolute';
       el.style.left = `${left}px`;
       el.style.top = `${top}px`;

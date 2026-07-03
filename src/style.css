@@ -19,13 +19,21 @@ body {
 }
 
 #camera,
+#cam-canvas,
 #gl-canvas,
 #debug-canvas {
   position: absolute;
   pointer-events: none;
 }
 
+/* The <video> is only a frame source: the visible camera image is drawn to
+   #cam-canvas in sync with the tracker output (frame-synchronized display). */
 #camera {
+  z-index: 0;
+  visibility: hidden;
+}
+
+#cam-canvas {
   z-index: 0;
 }
 

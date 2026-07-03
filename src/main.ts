@@ -1,8 +1,13 @@
 /**
  * App entry point. The heavy lifting (feature detection, matching, optical
- * flow) runs in a Web Worker with WASM kernels; the main thread only captures
- * frames, extrapolates the latest pose to the render timestamp and draws the
- * Three.js overlay at display rate.
+ * flow) runs in a Web Worker with WASM kernels.
+ *
+ * Display is frame-synchronized (the approach commercial engines use): each
+ * captured camera frame is buffered at full resolution, and when the tracker
+ * result for it arrives, the frame and the corners measured ON that frame are
+ * shown in the same paint. Overlay and camera pixels always belong to the
+ * same instant, so tracking latency delays the camera image slightly
+ * (~one processing period) instead of appearing as marker slip.
  */
 
 import { rgbaToGray } from './core/imageops';
@@ -23,6 +28,7 @@ const TARGET_WIDTH_METERS = 0.2;
 
 const container = document.getElementById('ar-container') as HTMLDivElement;
 const video = document.getElementById('camera') as HTMLVideoElement;
+const camCanvas = document.getElementById('cam-canvas') as HTMLCanvasElement;
 const glCanvas = document.getElementById('gl-canvas') as HTMLCanvasElement;
 const debugCanvas = document.getElementById('debug-canvas') as HTMLCanvasElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
@@ -45,6 +51,12 @@ let procCanvas: HTMLCanvasElement;
 let procCtx: CanvasRenderingContext2D;
 let procW = 0;
 let procH = 0;
+// Full-resolution copy of the frame currently being processed; blitted to the
+// visible camera canvas when its tracker result arrives (frame sync). Safe as
+// a single buffer because only one frame is ever in flight.
+let frameBufCanvas: HTMLCanvasElement;
+let frameBufCtx: CanvasRenderingContext2D;
+let lastBlitMs = 0;
 
 let running = false;
 let workerBusy = false;
@@ -120,6 +132,16 @@ worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => {
       lastFx = msg.fx;
       renderer.setIntrinsics({ fx: msg.fx, fy: msg.fx, cx: procW / 2, cy: procH / 2 }, procW, procH);
     }
+    // Frame sync: show the processed frame together with the quad measured
+    // on it. Evaluating the filter AT the sample time applies its smoothing
+    // and glitch guards without any extrapolation (during dropouts the
+    // sample is older and the filter coasts, with the gyro model if on).
+    if (renderer) {
+      renderer.drawCameraFrame(frameBufCanvas);
+      lastBlitMs = performance.now();
+      renderer.updatePlanarQuad(quadFilter.predict(msg.t / 1000, quadAdvance), procW, procH);
+      drawDebug();
+    }
   }
 };
 
@@ -151,10 +173,15 @@ function setupProcessing(): void {
   procCanvas.height = procH;
   procCtx = procCanvas.getContext('2d', { willReadFrequently: true })!;
 
+  frameBufCanvas = document.createElement('canvas');
+  frameBufCanvas.width = vw;
+  frameBufCanvas.height = vh;
+  frameBufCtx = frameBufCanvas.getContext('2d')!;
+
   debugCanvas.width = procW;
   debugCanvas.height = procH;
 
-  renderer = new ARRenderer(container, video, glCanvas, debugCanvas);
+  renderer = new ARRenderer(container, video, camCanvas, glCanvas, debugCanvas);
   renderer.setVideoSize(vw, vh);
   const K = defaultIntrinsics(procW, procH);
   lastFx = K.fx;
@@ -164,7 +191,11 @@ function setupProcessing(): void {
 }
 
 function captureAndSend(nowMs: number): void {
-  procCtx.drawImage(video, 0, 0, procW, procH);
+  // Buffer the full-resolution frame first, then derive the processing
+  // image from that same buffer so display and measurements can never come
+  // from different camera frames.
+  frameBufCtx.drawImage(video, 0, 0);
+  procCtx.drawImage(frameBufCanvas, 0, 0, procW, procH);
   const rgba = procCtx.getImageData(0, 0, procW, procH).data;
   const buffer = bufferPool.pop() ?? new ArrayBuffer(procW * procH);
   const gray = new Uint8Array(buffer);
@@ -258,13 +289,17 @@ function loop(now: number): void {
   // Feed the worker whenever it is idle (single frame in flight).
   if (workerReady && !workerBusy) captureAndSend(performance.now());
 
-  // Render with the pose extrapolated to the *display* time: the frame we
-  // draw now is composited roughly one vsync later, so lead by one frame.
-  const displaySec = performance.now() / 1000 + Math.min(dt, 0.034);
-  const pose = predictor.predict(displaySec);
-  renderer.updatePose(pose, timeSec, dt * 1.2);
-  renderer.updatePlanarQuad(quadFilter.predict(displaySec, quadAdvance), procW, procH);
-  drawDebug();
+  // The camera canvas is normally painted on worker results (frame sync);
+  // fall back to the live video only when the pipeline is not producing
+  // frames (before init, re-registering a target, worker hiccup).
+  if (!workerReady || performance.now() - lastBlitMs > 250) {
+    renderer.drawCameraFrame(video);
+  }
+
+  // 3D content: hold the pose of the displayed (processed) frame; the
+  // renderer's own smoothing converges on it between results.
+  const sampleSec = lastResult ? lastResult.t / 1000 : timeSec;
+  renderer.updatePose(predictor.predict(sampleSec), timeSec, dt * 1.2);
 
   renderCount++;
   if (timeSec - fpsWindowStart >= 1) {
