@@ -44,9 +44,14 @@ export class QuadFilter {
   constructor(options: QuadFilterOptions = {}) {
     this.maxAge = options.maxAge ?? 0.3;
     this.maxHorizon = options.maxHorizon ?? 0.1;
+    // With frame-synchronized display the measurement is the ground truth
+    // for the displayed frame, so smoothing lag shows up directly as marker
+    // slip. High beta opens the filter as soon as the quad actually moves
+    // (rest jitter is still crushed by minCutoff); dCutoff 3 Hz makes that
+    // opening react within ~2 samples instead of ~160 ms.
     const minCutoff = options.minCutoff ?? 1.2;
-    const beta = options.beta ?? 0.08;
-    this.filters = Array.from({ length: 8 }, () => new OneEuroFilter(minCutoff, beta, 1.0));
+    const beta = options.beta ?? 0.35;
+    this.filters = Array.from({ length: 8 }, () => new OneEuroFilter(minCutoff, beta, 3.0));
   }
 
   private rejections = 0;
