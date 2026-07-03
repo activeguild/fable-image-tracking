@@ -35,6 +35,8 @@ export interface QuadFilterOptions {
 export class QuadFilter {
   private s0: Sample | null = null;
   private s1: Sample | null = null;
+  /** EMA-smoothed measurement velocity (px/s per coordinate, tau ~50 ms). */
+  private vel: number[] | null = null;
   private readonly filters: OneEuroFilter[];
   private readonly maxAge: number;
   private readonly maxHorizon: number;
@@ -103,6 +105,28 @@ export class QuadFilter {
       if (this.rejections <= 2) return;
     }
     this.rejections = 0;
+    // Smoothed velocity: raw two-sample differences are noisy, and
+    // extrapolating with them makes every new sample issue a visible
+    // correction (rattle). An EMA over ~3 samples predicts far better.
+    if (s1) {
+      const dtN = timeSec - s1.t;
+      if (dtN > 1e-4 && dtN <= 0.15) {
+        const alpha = 1 - Math.exp(-dtN / 0.05);
+        if (!this.vel) {
+          // Seed with the first measured velocity so clean motion is not
+          // under-predicted while the average warms up.
+          this.vel = new Array<number>(8);
+          for (let i = 0; i < 8; i++) this.vel[i] = (c[i] - s1.c[i]) / dtN;
+        } else {
+          for (let i = 0; i < 8; i++) {
+            const vRaw = (c[i] - s1.c[i]) / dtN;
+            this.vel[i] += (vRaw - this.vel[i]) * alpha;
+          }
+        }
+      } else {
+        this.vel = null; // gap too large: velocity is stale
+      }
+    }
     this.s0 = this.s1;
     this.s1 = { t: timeSec, c };
   }
@@ -110,6 +134,7 @@ export class QuadFilter {
   clear(): void {
     this.s0 = null;
     this.s1 = null;
+    this.vel = null;
     for (const f of this.filters) f.reset();
   }
 
@@ -137,17 +162,20 @@ export class QuadFilter {
     const diag = Math.hypot(s1.c[4] - s1.c[0], s1.c[5] - s1.c[1]) || 1;
     const advHorizon = Math.min(age, 0.15); // never advance the model further
 
+    const hor = Math.min(age, this.maxHorizon);
     let c = s1.c;
     if (advance && age > 0) {
       const base = flatten(advance(unflatten(s1.c), s1.t, s1.t + advHorizon));
       if (s0 && dt > 1e-4 && dt <= 0.08) {
-        // Residual velocity: what the last sample moved beyond the model.
-        // Capped per corner - a bad residual must not fling corners around.
+        // Residual velocity (smoothed measurement velocity minus what the
+        // model explains). Capped per corner - a bad residual must not fling
+        // corners around.
         const explained = flatten(advance(unflatten(s0.c), s0.t, s1.t));
-        const k = Math.min(age, this.maxHorizon) / dt;
         const cap = 0.2 * diag;
         c = base.map((v, i) => {
-          const step = (s1.c[i] - explained[i]) * k;
+          const vMeas = this.vel ? this.vel[i] : (s1.c[i] - s0.c[i]) / dt;
+          const vModel = (explained[i] - s0.c[i]) / dt;
+          const step = (vMeas - vModel) * hor;
           return v + Math.max(-cap, Math.min(cap, step));
         });
       } else {
@@ -161,10 +189,10 @@ export class QuadFilter {
         }
       }
     } else if (s0 && dt > 1e-4 && dt <= 0.08 && age > 0) {
-      const k = Math.min(age, this.maxHorizon) / dt;
       const cap = 0.2 * diag;
       c = s1.c.map((v, i) => {
-        const step = (v - s0.c[i]) * k;
+        const vMeas = this.vel ? this.vel[i] : (v - s0.c[i]) / dt;
+        const step = vMeas * hor;
         return v + Math.max(-cap, Math.min(cap, step));
       });
       if (!shapeConsistent(c, s1.c, 0.12)) c = s1.c;
