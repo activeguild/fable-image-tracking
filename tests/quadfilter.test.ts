@@ -145,6 +145,31 @@ describe('QuadFilter', () => {
     expect(h.predict(10.04)![0].x - 10).toBeCloseTo(6, 1);
   });
 
+  it('smooths noisy velocities so extrapolation does not rattle', () => {
+    // Steady +100 px/s motion with +/-1.5 px measurement noise. Raw
+    // two-sample velocities swing between ~25 and ~175 px/s; extrapolating
+    // with them makes consecutive predictions jump back and forth (the
+    // IMU-off rattle). The smoothed velocity must keep the prediction step
+    // between consecutive samples monotonic and near-constant.
+    // Raw extrapolation error is 2n_k - n_{k-1} (up to 3x the noise,
+    // ~4 px RMS here); the smoothed velocity must keep the one-frame-ahead
+    // prediction error near the raw measurement noise instead.
+    const f = new QuadFilter({ minCutoff: 1000, beta: 1000 });
+    const noise = [0, 1.5, -1.5, 1.2, -1.2, 1.5, -1.5, 1.0];
+    const errors: number[] = [];
+    for (let k = 0; k < noise.length; k++) {
+      const t = 10.0 + k * 0.04;
+      f.addSample(quad(4 * k + noise[k]), t, 1);
+      if (k >= 2) {
+        const truth = 10 + 4 * (k + 1);
+        errors.push(f.predict(t + 0.04)![0].x - truth);
+      }
+    }
+    const rms = Math.sqrt(errors.reduce((a, e) => a + e * e, 0) / errors.length);
+    expect(rms).toBeLessThan(3.0); // raw two-sample velocity gives ~4.0
+    for (const e of errors) expect(Math.abs(e)).toBeLessThan(3.5); // raw peaks at 4.5
+  });
+
   it('clears cleanly', () => {
     const f = new QuadFilter();
     f.addSample(quad(0), 10.0);
