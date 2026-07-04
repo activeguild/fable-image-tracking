@@ -33,9 +33,10 @@ export default function App() {
       <ImageTracker onFound={() => console.log('found!')}>
         {/* 平面の画像・動画: 自動で高精度なホモグラフィ表示になる */}
         <PlanarContent source="/my-photo.png" />
-        {/* 3D オブジェクト: ポーズにアンカーされる */}
-        <mesh position={[0, 0, 0.03]}>
-          <boxGeometry args={[0.06, 0.06, 0.06]} />
+        {/* 3D オブジェクト: ポーズにアンカーされる。単位はマーカー幅基準
+            （デフォルト）: 0.3 のキューブ = マーカー幅の 30% */}
+        <mesh position={[0, 0, 0.15]}>
+          <boxGeometry args={[0.3, 0.3, 0.3]} />
           <meshStandardMaterial color="hotpink" />
         </mesh>
       </ImageTracker>
@@ -68,7 +69,7 @@ export default function App() {
 | `wasmSrc` | `string` | `/tracker.wasm` | WASM カーネルの URL（404 なら JS フォールバック） |
 | `autoStart` | `boolean` | `true` | マウント時にカメラを起動。iOS では `false` + `startCamera()` 推奨 |
 | `imu` | `boolean` | `false` | ジャイロを運動事前値として使用（iOS は権限ダイアログ） |
-| `targetWidthMeters` | `number` | `0.2` | ターゲットの物理幅（3D シーンのスケール基準） |
+| `targetWidthMeters` | `number` | `1` | シーン単位でのターゲット幅。デフォルト 1 = **マーカー幅が three.js の 1 単位**（幅 30% のキューブなら `0.3`）。メートル基準にしたい場合は実寸（例: `0.2`）を渡す |
 | `dpr` | `number \| [number, number]` | - | 3D キャンバスの devicePixelRatio |
 | `onReady` | `(info) => void` | - | ターゲットコンパイル完了時 |
 | `onError` | `(err) => void` | - | カメラ起動失敗など |
@@ -76,6 +77,7 @@ export default function App() {
 ### `<PlanarContent>`
 
 ターゲット平面上の画像・動画を、計測ホモグラフィ（CSS matrix3d）でピクセル精度で貼り付けます。
+（座標系: `ImageTracker` の子はマーカー中心原点・x 右・y 上・z 手前、1 単位 = マーカー幅がデフォルト。）
 `<FableCanvas>` 内ならどこに書いても動きます（通常は 3D コンテンツと並べて
 `<ImageTracker>` 内に）。実体はカメラと 3D キャンバスの間の DOM レイヤーに
 マウントされるため、カメラ内部パラメータの誤差の影響を受けません。
@@ -99,7 +101,8 @@ three.js カメラをトラッカーの（自己校正される）ピンホー�
 
 ### `<ImageTracker>`
 
-子要素をターゲットにアンカーします。座標系はターゲット中心が原点、x 右・y 上・z 手前（メートル単位）。
+子要素をターゲットにアンカーします。座標系はターゲット中心が原点、x 右・y 上・z 手前。
+単位はデフォルトで **1 = マーカー幅**（`targetWidthMeters` で変更可）。
 
 | prop | 型 | 説明 |
 | --- | --- | --- |

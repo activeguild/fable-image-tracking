@@ -25,7 +25,12 @@ export interface FableEngineOptions {
   wasmSrc?: string;
   /** Use the gyroscope as a motion prior (requests permission on iOS). */
   imu?: boolean;
-  /** Physical target width in meters (scales the 3D scene). Default 0.2. */
+  /**
+   * Target width in scene units. Default 1, so 3D coordinates are relative
+   * to the marker: 1 unit = one marker width. Monocular tracking has no
+   * absolute scale, so this only sets the scene's scale convention; pass
+   * the physical width in meters if you prefer metric units.
+   */
   targetWidthMeters?: number;
   /** Processing resolution (width in px). Default 360. */
   procWidth?: number;
@@ -108,7 +113,7 @@ export class FableEngine {
     this.options = {
       wasmSrc: '/tracker.wasm',
       imu: false,
-      targetWidthMeters: 0.2,
+      targetWidthMeters: 1,
       procWidth: 360,
       ...options,
     };

@@ -38,8 +38,10 @@ export function App() {
               PlanarContent items as needed, each with its own offset. */}
           {placement !== 'side' && <PlanarContent source={contentImage} />}
           {placement !== 'on' && <PlanarContent source={contentImage2} offset={{ x: 1.15 }} />}
-          <mesh position={[0, 0, 0.03]}>
-            <boxGeometry args={[0.06, 0.06, 0.06]} />
+          {/* Units are marker-relative (default targetWidthMeters=1):
+              a 0.3 cube is 30% of the marker width. */}
+          <mesh position={[0, 0, 0.15]}>
+            <boxGeometry args={[0.3, 0.3, 0.3]} />
             <meshStandardMaterial color="hotpink" />
           </mesh>
         </ImageTracker>

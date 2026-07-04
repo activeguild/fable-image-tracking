@@ -37,7 +37,11 @@ export interface FableCanvasProps {
   autoStart?: boolean;
   /** Use the gyroscope as a tracking motion prior. Default false. */
   imu?: boolean;
-  /** Physical target width in meters (scales the 3D scene). Default 0.2. */
+  /**
+   * Target width in scene units. Default 1: 3D coordinates are relative to
+   * the marker (1 unit = one marker width, so a half-width cube is 0.5).
+   * Pass the physical width in meters (e.g. 0.2) for metric units instead.
+   */
   targetWidthMeters?: number;
   style?: CSSProperties;
   className?: string;
@@ -60,7 +64,7 @@ export function FableCanvas({
   wasmSrc,
   autoStart = true,
   imu = false,
-  targetWidthMeters = 0.2,
+  targetWidthMeters = 1,
   style,
   className,
   dpr,
