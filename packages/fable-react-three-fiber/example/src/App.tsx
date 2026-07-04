@@ -23,25 +23,27 @@ export function App() {
   return (
     <>
       <FableCanvas
-        targetImage={target}
         style={{ width: '100vw', height: '100vh' }}
         onReady={() => setStatus('searching')}
         onError={(err) => setStatus(`error: ${err.message}`)}
       >
         <FableCamera />
+        {/* Zappar-style: the tracker owns the target image (a plain image,
+            no .zpt training file), and visibility callbacks get an anchor. */}
         <ImageTracker
-          onFound={() => setStatus('tracking')}
-          onLost={() => setStatus('searching')}
+          targetImage={target}
+          onVisible={() => setStatus('tracking')}
+          onNotVisible={() => setStatus('searching')}
         >
           {/* Flat media is automatically routed to the pixel-accurate
               homography overlay; meshes ride on the 3D pose. Declare as many
               PlanarContent items as needed, each with its own offset. */}
           {placement !== 'side' && <PlanarContent source={contentImage} />}
           {placement !== 'on' && <PlanarContent source={contentImage2} offset={{ x: 1.15 }} />}
-          {/* Units are marker-relative (default targetWidthMeters=1):
-              a 0.3 cube is 30% of the marker width. */}
-          <mesh position={[0, 0, 0.15]}>
-            <boxGeometry args={[0.3, 0.3, 0.3]} />
+          {/* Zappar-compatible units (default): the target is 2 units tall,
+              so a 0.6 cube is 30% of this square marker. */}
+          <mesh position={[0, 0, 0.3]}>
+            <boxGeometry args={[0.6, 0.6, 0.6]} />
             <meshStandardMaterial color="hotpink" />
           </mesh>
         </ImageTracker>

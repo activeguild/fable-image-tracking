@@ -24,8 +24,12 @@ import {
 } from './engine/FableEngine';
 
 export interface FableCanvasProps {
-  /** Tracking target: image URL or an already-loaded image/canvas. */
-  targetImage: TargetSource;
+  /**
+   * Tracking target: image URL or an already-loaded image/canvas. May be
+   * omitted when an <ImageTracker targetImage=...> child provides it
+   * (Zappar-style).
+   */
+  targetImage?: TargetSource;
   /**
    * URL of the WASM kernels. Copy `assets/tracker.wasm` from this package to
    * your public directory. Defaults to '/tracker.wasm'; without it the
@@ -38,9 +42,10 @@ export interface FableCanvasProps {
   /** Use the gyroscope as a tracking motion prior. Default false. */
   imu?: boolean;
   /**
-   * Target width in scene units. Default 1: 3D coordinates are relative to
-   * the marker (1 unit = one marker width, so a half-width cube is 0.5).
-   * Pass the physical width in meters (e.g. 0.2) for metric units instead.
+   * Target width in scene units. Default: Zappar-compatible scale - the
+   * target is 2 units tall (top edge y=+1, bottom y=-1) and the width
+   * follows the aspect ratio. Pass an explicit width (e.g. 1 for "1 unit =
+   * marker width", or the physical width in meters) to override.
    */
   targetWidthMeters?: number;
   style?: CSSProperties;
@@ -64,7 +69,7 @@ export function FableCanvas({
   wasmSrc,
   autoStart = true,
   imu = false,
-  targetWidthMeters = 1,
+  targetWidthMeters,
   style,
   className,
   dpr,
@@ -76,6 +81,9 @@ export function FableCanvas({
   const videoRef = useRef<HTMLVideoElement>(null);
   const camCanvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<FableEngine | null>(null);
+  // Engine as state too, so context consumers (e.g. <ImageTracker
+  // targetImage>) re-run their effects once it exists.
+  const [engine, setEngine] = useState<FableEngine | null>(null);
   const [started, setStarted] = useState(false);
   const [targetInfo, setTargetInfo] = useState<FableTargetInfo | null>(null);
   const [coverRect, setCoverRect] = useState<Rect | null>(null);
@@ -125,6 +133,7 @@ export function FableCanvas({
       targetWidthMeters,
     });
     engineRef.current = engine;
+    setEngine(engine);
     const offReady = engine.onReady((info) => {
       setTargetInfo(info);
       callbacksRef.current.onReady?.(info);
@@ -142,6 +151,7 @@ export function FableCanvas({
       offReady();
       engine.stop();
       engineRef.current = null;
+      setEngine(null);
       setStarted(false);
       setTargetInfo(null);
     };
@@ -159,7 +169,7 @@ export function FableCanvas({
 
   const contextValue = useMemo<FableContextValue>(
     () => ({
-      engine: engineRef.current,
+      engine,
       targetInfo,
       started,
       startCamera,
@@ -168,7 +178,7 @@ export function FableCanvas({
       coverRect,
       overlayContainer,
     }),
-    [targetInfo, started, startCamera, coverRect, overlayContainer]
+    [engine, targetInfo, started, startCamera, coverRect, overlayContainer]
   );
 
   const overlayStyle: CSSProperties = coverRect

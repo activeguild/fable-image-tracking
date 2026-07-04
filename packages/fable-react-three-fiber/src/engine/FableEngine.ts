@@ -17,8 +17,11 @@ import type { ReadyMessage, ResultMessage } from './tracker/worker';
 export type TargetSource = string | HTMLImageElement | HTMLCanvasElement;
 
 export interface FableEngineOptions {
-  /** Tracking target: image URL or an already-loaded image/canvas. */
-  target: TargetSource;
+  /**
+   * Tracking target: image URL or an already-loaded image/canvas. Can also
+   * be provided later via setTarget() (e.g. from an <ImageTracker> prop).
+   */
+  target?: TargetSource;
   video: HTMLVideoElement;
   cameraCanvas: HTMLCanvasElement;
   /** URL of the WASM kernels (a package asset). Default '/tracker.wasm'. */
@@ -26,10 +29,11 @@ export interface FableEngineOptions {
   /** Use the gyroscope as a motion prior (requests permission on iOS). */
   imu?: boolean;
   /**
-   * Target width in scene units. Default 1, so 3D coordinates are relative
-   * to the marker: 1 unit = one marker width. Monocular tracking has no
-   * absolute scale, so this only sets the scene's scale convention; pass
-   * the physical width in meters if you prefer metric units.
+   * Target width in scene units. Monocular tracking has no absolute scale,
+   * so this only sets the scene's scale convention. Default: Zappar
+   * compatible - the target is 2 units tall (top edge y=+1, bottom y=-1),
+   * width follows the aspect ratio. Pass an explicit width (e.g. 1 for
+   * "1 unit = marker width", or the physical width in meters) to override.
    */
   targetWidthMeters?: number;
   /** Processing resolution (width in px). Default 360. */
@@ -75,8 +79,9 @@ export class FableEngine {
   private readonly video: HTMLVideoElement;
   private readonly camCanvas: HTMLCanvasElement;
   private camCtx: CanvasRenderingContext2D | null = null;
-  private readonly options: Required<Pick<FableEngineOptions, 'wasmSrc' | 'imu' | 'targetWidthMeters' | 'procWidth'>> &
+  private readonly options: Required<Pick<FableEngineOptions, 'wasmSrc' | 'imu' | 'procWidth'>> &
     FableEngineOptions;
+  private pendingTarget: TargetSource | null = null;
 
   private worker: Worker | null = null;
   private gyro = new GyroCollector();
@@ -113,10 +118,10 @@ export class FableEngine {
     this.options = {
       wasmSrc: '/tracker.wasm',
       imu: false,
-      targetWidthMeters: 1,
       procWidth: 360,
       ...options,
     };
+    this.pendingTarget = options.target ?? null;
   }
 
   onFrame(listener: (frame: FableFrame) => void): () => void {
@@ -173,11 +178,24 @@ export class FableEngine {
 
     this.worker = new Worker(new URL('./tracker/worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<ReadyMessage | ResultMessage>) => this.onWorkerMessage(event.data);
-    const targetCanvas = await resolveTarget(this.options.target);
-    this.sendInit(targetCanvas);
-
     this.running = true;
+    if (this.pendingTarget) {
+      const target = this.pendingTarget;
+      const targetCanvas = await resolveTarget(target);
+      if (this.pendingTarget === target) this.sendInit(targetCanvas);
+    }
     this.rafId = requestAnimationFrame(this.loop);
+  }
+
+  /**
+   * Register (or replace) the tracking target. May be called before start()
+   * - the target is compiled once the camera is running.
+   */
+  async setTarget(target: TargetSource): Promise<void> {
+    this.pendingTarget = target;
+    if (!this.running || !this.worker) return;
+    const canvas = await resolveTarget(target);
+    if (this.pendingTarget === target) this.sendInit(canvas);
   }
 
   /** Stops the loop, camera stream and worker. The instance is not reusable. */
@@ -195,6 +213,8 @@ export class FableEngine {
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     const rgba = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     const gray = rgbaToGray(rgba, canvas.width, canvas.height);
+    // Default scale: Zappar-compatible, target height = 2 units.
+    const widthMeters = this.options.targetWidthMeters ?? (2 * canvas.width) / canvas.height;
     this.workerReady = false;
     this.worker!.postMessage(
       {
@@ -202,7 +222,7 @@ export class FableEngine {
         gray: gray.buffer,
         width: canvas.width,
         height: canvas.height,
-        widthMeters: this.options.targetWidthMeters,
+        widthMeters,
         procWidth: this.procW,
         procHeight: this.procH,
         wasmSrc: this.options.wasmSrc,

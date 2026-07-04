@@ -14,9 +14,20 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Group, Matrix4, Quaternion, Vector3 } from 'three';
 import { useFable } from './context';
 import { Vector3Filter } from './engine/core/filter';
-import type { FableFrame } from './engine/FableEngine';
+import type { FableFrame, TargetSource } from './engine/FableEngine';
+
+/** Zappar-compatible anchor object passed to onVisible/onNotVisible/onNewAnchor. */
+export interface TrackerAnchor {
+  id: string;
+}
 
 export interface ImageTrackerProps {
+  /**
+   * Tracking target (Zappar-style: on the tracker instead of the canvas).
+   * A plain image URL/element - no .zpt training file is needed; features
+   * are compiled at runtime. Overrides <FableCanvas targetImage>.
+   */
+  targetImage?: TargetSource;
   /** Set false to hide the anchor and suspend callbacks. Default true. */
   enabled?: boolean;
   /** Fires when the target becomes visible (found / confidence recovered). */
@@ -25,14 +36,37 @@ export interface ImageTrackerProps {
   onUpdated?: (frame: FableFrame) => void;
   /** Fires when the target is lost (or confidence-gated out). */
   onLost?: () => void;
+  /** Zappar-compatible alias of onFound. */
+  onVisible?: (anchor: TrackerAnchor) => void;
+  /** Zappar-compatible alias of onLost. */
+  onNotVisible?: (anchor: TrackerAnchor) => void;
+  /** Zappar-compatible: fires once, the first time the target is seen. */
+  onNewAnchor?: (anchor: TrackerAnchor) => void;
   children?: ReactNode;
 }
 
-export function ImageTracker({ enabled = true, onFound, onUpdated, onLost, children }: ImageTrackerProps): ReactNode {
+const ANCHOR: TrackerAnchor = { id: 'image-target' };
+
+export function ImageTracker({
+  targetImage,
+  enabled = true,
+  onFound,
+  onUpdated,
+  onLost,
+  onVisible,
+  onNotVisible,
+  onNewAnchor,
+  children,
+}: ImageTrackerProps): ReactNode {
   const groupRef = useRef<Group>(null);
-  const { onFrame } = useFable();
-  const callbacksRef = useRef({ enabled, onFound, onUpdated, onLost });
-  callbacksRef.current = { enabled, onFound, onUpdated, onLost };
+  const { onFrame, engine } = useFable();
+  const callbacksRef = useRef({ enabled, onFound, onUpdated, onLost, onVisible, onNotVisible, onNewAnchor });
+  callbacksRef.current = { enabled, onFound, onUpdated, onLost, onVisible, onNotVisible, onNewAnchor };
+
+  // Zappar-style target registration: the tracker owns the target image.
+  useEffect(() => {
+    if (targetImage && engine) void engine.setTarget(targetImage);
+  }, [targetImage, engine]);
 
   useEffect(() => {
     const group = groupRef.current;
@@ -48,6 +82,7 @@ export function ImageTracker({ enabled = true, onFound, onUpdated, onLost, child
     let hasPose = false;
     let lastUpdateTime = -1;
     let shown = false;
+    let everSeen = false;
 
     const matrix = new Matrix4();
     const position = new Vector3();
@@ -59,6 +94,7 @@ export function ImageTracker({ enabled = true, onFound, onUpdated, onLost, child
         shown = false;
         group.visible = false;
         callbacksRef.current.onLost?.();
+        callbacksRef.current.onNotVisible?.(ANCHOR);
       }
       if (hasPose) {
         positionFilter.reset();
@@ -108,7 +144,12 @@ export function ImageTracker({ enabled = true, onFound, onUpdated, onLost, child
       group.visible = true;
       if (!shown) {
         shown = true;
+        if (!everSeen) {
+          everSeen = true;
+          callbacksRef.current.onNewAnchor?.(ANCHOR);
+        }
         callbacksRef.current.onFound?.(frame);
+        callbacksRef.current.onVisible?.(ANCHOR);
       }
       callbacksRef.current.onUpdated?.(frame);
     });
