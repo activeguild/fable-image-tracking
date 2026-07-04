@@ -87,10 +87,6 @@ export function FableCanvas({
   const [started, setStarted] = useState(false);
   const [targetInfo, setTargetInfo] = useState<FableTargetInfo | null>(null);
   const [coverRect, setCoverRect] = useState<Rect | null>(null);
-  // DOM layer between the camera canvas and the 3D canvas, where
-  // <PlanarContent> mounts its media (via context, from anywhere in the
-  // tree - including inside the R3F scene).
-  const [overlayContainer, setOverlayContainer] = useState<HTMLDivElement | null>(null);
 
   // Latest-value refs so the stable startCamera callback never goes stale.
   const callbacksRef = useRef({ onReady, onError });
@@ -176,9 +172,8 @@ export function FableCanvas({
       onFrame: (listener: (frame: FableFrame) => void) =>
         engineRef.current ? engineRef.current.onFrame(listener) : () => {},
       coverRect,
-      overlayContainer,
     }),
-    [engine, targetInfo, started, startCamera, coverRect, overlayContainer]
+    [engine, targetInfo, started, startCamera, coverRect]
   );
 
   const overlayStyle: CSSProperties = coverRect
@@ -201,10 +196,6 @@ export function FableCanvas({
         {/* Frame source only; the visible image is the frame-synced canvas. */}
         <video ref={videoRef} autoPlay muted playsInline style={{ ...overlayStyle, visibility: 'hidden' }} />
         <canvas ref={camCanvasRef} style={overlayStyle} />
-        <div
-          ref={setOverlayContainer}
-          style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}
-        />
         <div style={overlayStyle}>
           <Canvas
             gl={{ alpha: true, antialias: true }}

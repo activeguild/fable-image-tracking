@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { CanvasTexture, SRGBColorSpace } from 'three';
 import { FableCanvas, FableCamera, ImageTracker, PlanarContent } from '@j1ngzoue/fable-react-three-fiber';
 import { createSampleTargetCanvas } from './sampleTarget';
 import { createSampleImageCanvas } from './sampleContent';
@@ -7,18 +8,13 @@ export function App() {
   const [status, setStatus] = useState('initializing');
   const [placement, setPlacement] = useState<'on' | 'side' | 'both'>('on');
   // The sample target is procedural; a real app passes an image URL instead:
-  //   <FableCanvas targetImage="/my-target.png" ...>
+  //   <ImageTracker targetImage="/my-target.png">
   const target = useMemo(() => createSampleTargetCanvas(384), []);
-  const contentImage = useMemo(() => createSampleImageCanvas(), []);
-  // Each <PlanarContent> mounts its own DOM node, so simultaneous copies of
-  // the (cached) sample canvas need their own clones.
-  const contentImage2 = useMemo(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = contentImage.width;
-    canvas.height = contentImage.height;
-    canvas.getContext('2d')!.drawImage(contentImage, 0, 0);
-    return canvas;
-  }, [contentImage]);
+  const contentTexture = useMemo(() => {
+    const texture = new CanvasTexture(createSampleImageCanvas());
+    texture.colorSpace = SRGBColorSpace;
+    return texture;
+  }, []);
 
   return (
     <>
@@ -35,11 +31,19 @@ export function App() {
           onVisible={() => setStatus('tracking')}
           onNotVisible={() => setStatus('searching')}
         >
-          {/* Flat media is automatically routed to the pixel-accurate
-              homography overlay; meshes ride on the 3D pose. Declare as many
-              PlanarContent items as needed, each with its own offset. */}
-          {placement !== 'side' && <PlanarContent source={contentImage} />}
-          {placement !== 'on' && <PlanarContent source={contentImage2} offset={{ x: 1.15 }} />}
+          {/* PlanarContent is a homography-pinned plane mesh: pass any
+              material as children. Units are scene units (target height =
+              2); this square target is 2x2, so offset x=2.3 sits beside it. */}
+          {placement !== 'side' && (
+            <PlanarContent>
+              <meshBasicMaterial map={contentTexture} toneMapped={false} />
+            </PlanarContent>
+          )}
+          {placement !== 'on' && (
+            <PlanarContent offset={{ x: 2.3 }}>
+              <meshBasicMaterial map={contentTexture} toneMapped={false} />
+            </PlanarContent>
+          )}
           {/* Zappar-compatible units (default): the target is 2 units tall,
               so a 0.6 cube is 30% of this square marker. */}
           <mesh position={[0, 0, 0.3]}>

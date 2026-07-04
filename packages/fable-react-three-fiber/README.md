@@ -35,8 +35,11 @@ export default function App() {
         onVisible={(anchor) => console.log(`Visible ${anchor.id}`)}
         onNotVisible={(anchor) => console.log(`Not visible ${anchor.id}`)}
       >
-        {/* 平面の画像・動画: 自動で高精度なホモグラフィ表示になる */}
-        <PlanarContent source="/my-photo.png" />
+        {/* 平面コンテンツ: ホモグラフィ精度でピン留めされる平面メッシュ。
+            マテリアルは自由（video texture やシェーダも可） */}
+        <PlanarContent>
+          <meshStandardMaterial map={photoTexture} />
+        </PlanarContent>
         {/* 3D オブジェクト: ポーズにアンカーされる。単位は Zappar 互換
             （ターゲットの高さ = 2、上端 y=+1）: 0.6 のキューブ =
             正方形マーカー幅の 30% */}
@@ -53,11 +56,11 @@ export default function App() {
 ```
 
 > コンテンツは全部 `<ImageTracker>` の中に書けば OK です。
-> `<PlanarContent>`（平面の画像・動画）は自動的に DOM レイヤーへルーティングされ、
-> 計測ホモグラフィそのままの CSS matrix3d でピクセル精度で貼り付きます。
-> mesh などの 3D オブジェクトは 6DoF ポーズにアンカーされます。ポーズは
-> 再投影誤差最小化（Gauss-Newton）で毎フレーム精密化されるので、マーカーから
-> 離れた位置に置いたコンテンツも安定します。
+> `<PlanarContent>` は普通の平面メッシュとして振る舞いますが、頂点を毎フレーム
+> 計測ホモグラフィに一致させるため、カメラ内部パラメータの誤差に影響されず
+> ピクセル精度で貼り付きます。mesh などの 3D オブジェクトは 6DoF ポーズに
+> アンカーされます。ポーズは再投影誤差最小化（Gauss-Newton）で毎フレーム
+> 精密化されるので、マーカーから離れた位置に置いたコンテンツも安定します。
 
 カメラ映像は**フレーム同期表示**です: トラッカーが処理を終えたフレームを、そのフレームで計測した
 アンカー姿勢と同じペイントで表示するため、遅延がマーカーずれとして見えません（商用エンジンと同方式）。
@@ -81,19 +84,22 @@ export default function App() {
 
 ### `<PlanarContent>`
 
-ターゲット平面上の画像・動画を、計測ホモグラフィ（CSS matrix3d）でピクセル精度で貼り付けます。
-（`offset` の単位はターゲット幅/高さで、3D 側のシーン単位とは独立です。）
-`<FableCanvas>` 内ならどこに書いても動きます（通常は 3D コンテンツと並べて
-`<ImageTracker>` 内に）。実体はカメラと 3D キャンバスの間の DOM レイヤーに
-マウントされるため、カメラ内部パラメータの誤差の影響を受けません。
-信頼度ゲート連動のフェード（トラッキングが弱い間は非表示）付き。
+**ホモグラフィ精度でピン留めされる平面メッシュ**です。使い方は普通の R3F メッシュと同じで、
+子にマテリアルを渡します（`meshStandardMaterial`、`VideoTexture`、カスタムシェーダなど何でも可）。
+`<ImageTracker>` の中に置いてください。
+
+内部では細分化した平面の頂点を毎フレーム、計測ホモグラフィと画面上で一致する位置へ補正します。
+6DoF ポーズ（カメラ内部パラメータの仮定を含む）の誤差の影響を受けず、CSS 直貼りと同精度のまま、
+本物のメッシュとして深度（他の 3D との遮蔽）やライティングも正しく機能します。
 
 | prop | 型 | 説明 |
 | --- | --- | --- |
-| `source` | `string \| HTMLImageElement \| HTMLCanvasElement \| HTMLVideoElement` | 表示するメディア（URL または要素） |
-| `offset` | `{ x?: number; y?: number }` | ターゲット平面内の配置オフセット（ターゲット幅/高さ単位）。`{ x: 1.15 }` でマーカーの右横。ホモグラフィは平面全体を写像するのでマーカー外でも精度は同じ |
+| `width` / `height` | `number` | 平面のサイズ（シーン単位）。省略時はターゲット全面 |
+| `offset` | `{ x?: number; y?: number }` | ターゲット平面内の配置（シーン単位、0,0 = ターゲット中心）。ホモグラフィは平面全体を写像するのでマーカー外でも精度は同じ |
+| `children` | マテリアル要素 | `<meshStandardMaterial map={...} />` など |
 
-動画を渡す場合は `muted` + `playsInline` を設定し、ユーザージェスチャ内で `play()` を呼んでください（iOS の自動再生制約）。
+動画は three.js の `VideoTexture`（drei の `useVideoTexture` など）で渡してください。
+iOS の自動再生制約のため `muted` + `playsInline` を設定し、ユーザージェスチャ内で `play()` を呼びます。
 
 ### `<FableCamera>`
 
@@ -145,7 +151,7 @@ const { engine, targetInfo, started, startCamera, onFrame } = useFable();
 | `<Loader>` / `<BrowserCompatibility>` | なし | `onReady` / `onError` で代替 |
 | 顔・インスタントトラッキング | 非対応 | 画像トラッキング専用 |
 
-追加機能: 平面メディアは `<PlanarContent>` に置き換えるとポーズ非経由（計測ホモグラフィ直貼り）になり、張り付き精度が上がります。
+追加機能: ターゲット平面上のメディアは `<PlanarContent>`（マテリアルを子に取る平面メッシュ）を使うと、ポーズ非経由のホモグラフィ精度でピン留めされます。
 
 ## 開発
 
