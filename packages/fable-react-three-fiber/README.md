@@ -84,6 +84,7 @@ export default function App() {
 | prop | 型 | 説明 |
 | --- | --- | --- |
 | `source` | `string \| HTMLImageElement \| HTMLCanvasElement \| HTMLVideoElement` | 表示するメディア（URL または要素） |
+| `offset` | `{ x?: number; y?: number }` | ターゲット平面内の配置オフセット（ターゲット幅/高さ単位）。`{ x: 1.15 }` でマーカーの右横。ホモグラフィは平面全体を写像するのでマーカー外でも精度は同じ |
 
 動画を渡す場合は `muted` + `playsInline` を設定し、ユーザージェスチャ内で `play()` を呼んでください（iOS の自動再生制約）。
 

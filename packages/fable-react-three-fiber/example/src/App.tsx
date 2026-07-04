@@ -5,6 +5,7 @@ import { createSampleImageCanvas } from './sampleContent';
 
 export function App() {
   const [status, setStatus] = useState('initializing');
+  const [placement, setPlacement] = useState<'on' | 'side'>('on');
   // The sample target is procedural; a real app passes an image URL instead:
   //   <FableCanvas targetImage="/my-target.png" ...>
   const target = useMemo(() => createSampleTargetCanvas(384), []);
@@ -25,7 +26,7 @@ export function App() {
         >
           {/* Flat media is automatically routed to the pixel-accurate
               homography overlay; meshes ride on the 3D pose. */}
-          <PlanarContent source={contentImage} />
+          <PlanarContent source={contentImage} offset={placement === 'side' ? { x: 1.15 } : undefined} />
           <mesh position={[0, 0, 0.03]}>
             <boxGeometry args={[0.06, 0.06, 0.06]} />
             <meshStandardMaterial color="hotpink" />
@@ -35,19 +36,38 @@ export function App() {
         <directionalLight position={[1, 2, 3]} intensity={1.5} />
       </FableCanvas>
       <div
-        id="status"
         style={{
           position: 'fixed',
           left: 12,
           bottom: 12,
-          color: '#fff',
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
           font: '13px system-ui',
-          background: 'rgba(0,0,0,0.5)',
-          padding: '6px 10px',
-          borderRadius: 6,
         }}
       >
-        {status}
+        <div
+          id="status"
+          style={{ color: '#fff', background: 'rgba(0,0,0,0.5)', padding: '6px 10px', borderRadius: 6 }}
+        >
+          {status}
+        </div>
+        <select
+          id="placement-select"
+          value={placement}
+          onChange={(e) => setPlacement(e.target.value as 'on' | 'side')}
+          style={{
+            background: '#1f2937',
+            color: '#e5e7eb',
+            border: '1px solid #4b5563',
+            borderRadius: 6,
+            padding: '5px 8px',
+            fontSize: 13,
+          }}
+        >
+          <option value="on">画像（マーカー上）</option>
+          <option value="side">画像（マーカー横）</option>
+        </select>
       </div>
     </>
   );

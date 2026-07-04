@@ -19,14 +19,21 @@ import { computeHomography, matMul3, type Mat3, type Point2 } from './engine/cor
 export interface PlanarContentProps {
   /** Media shown on the target: URL or an image/canvas/video element. */
   source: string | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
+  /**
+   * Placement offset in the target plane, in target-size units:
+   * `{ x: 1.15 }` puts the media one target-width (plus a gap) to the right
+   * of the marker. The homography maps the whole plane, so off-marker media
+   * pins just as accurately. Default `{ x: 0, y: 0 }` (on the marker).
+   */
+  offset?: { x?: number; y?: number };
 }
 
-export function PlanarContent({ source }: PlanarContentProps): ReactNode {
+export function PlanarContent({ source, offset }: PlanarContentProps): ReactNode {
   const { onFrame, targetInfo, coverRect, overlayContainer } = useFable();
 
   // Latest layout/target info for the frame subscription without resubscribing.
-  const layoutRef = useRef({ targetInfo, coverRect });
-  layoutRef.current = { targetInfo, coverRect };
+  const layoutRef = useRef({ targetInfo, coverRect, offset });
+  layoutRef.current = { targetInfo, coverRect, offset };
 
   useEffect(() => {
     if (!overlayContainer) return;
@@ -81,7 +88,7 @@ export function PlanarContent({ source }: PlanarContentProps): ReactNode {
     const off = onFrame((frame) => {
       const el = element;
       if (!el) return;
-      const { targetInfo: info, coverRect: rect } = layoutRef.current;
+      const { targetInfo: info, coverRect: rect, offset: place } = layoutRef.current;
       if (frame.corners) {
         const weight = Math.min(1, Math.max(0.2, frame.inlierCount / 50));
         quadFilter.addSample(frame.corners, frame.t / 1000, weight);
@@ -109,10 +116,11 @@ export function PlanarContent({ source }: PlanarContentProps): ReactNode {
         el.style.visibility = 'hidden';
         return;
       }
-      // Contain-fit the media inside the target rectangle, then compose.
+      // Contain-fit the media inside the (possibly offset) target rectangle,
+      // then compose.
       const fit = Math.min(info.targetWidthPx / mediaW, info.targetHeightPx / mediaH);
-      const ox = (info.targetWidthPx - mediaW * fit) / 2;
-      const oy = (info.targetHeightPx - mediaH * fit) / 2;
+      const ox = (info.targetWidthPx - mediaW * fit) / 2 + (place?.x ?? 0) * info.targetWidthPx;
+      const oy = (info.targetHeightPx - mediaH * fit) / 2 + (place?.y ?? 0) * info.targetHeightPx;
       const mediaToTarget: Mat3 = [fit, 0, ox, 0, fit, oy, 0, 0, 1];
       const h = matMul3(targetToScreen, mediaToTarget);
       if (Math.abs(h[8]) < 1e-12) {

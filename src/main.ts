@@ -446,6 +446,11 @@ function applyContent(value: string): void {
       renderer?.setContent({ type: 'cube' });
       lastContentValue = 'cube';
       break;
+    case 'image-side':
+      cleanupContentVideo();
+      renderer?.setContent({ type: 'image', source: createSampleImageCanvas(), placement: 'beside' });
+      lastContentValue = 'image-side';
+      break;
     default: // image
       cleanupContentVideo();
       renderer?.setContent({ type: 'image', source: createSampleImageCanvas() });

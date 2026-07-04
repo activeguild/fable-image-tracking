@@ -19,7 +19,16 @@ import { computeHomography, matMul3, type Mat3, type Point2 } from '../core/homo
 
 export type ContentSpec =
   | { type: 'cube' }
-  | { type: 'image'; source: HTMLImageElement | HTMLCanvasElement }
+  | {
+      type: 'image';
+      source: HTMLImageElement | HTMLCanvasElement;
+      /**
+       * Where the media sits in the target plane: on the marker itself, or
+       * beside it (offset by ~1.15 target widths to the right) - the latter
+       * verifies pinning accuracy away from the measured region.
+       */
+      placement?: 'target' | 'beside';
+    }
   | { type: 'video'; source: HTMLVideoElement };
 
 export class ARRenderer {
@@ -40,6 +49,8 @@ export class ARRenderer {
   private planarEl: HTMLElement | null = null;
   private planarMediaW = 1;
   private planarMediaH = 1;
+  /** Horizontal shift of planar media, in target widths (0 = on the marker). */
+  private planarShiftX = 0;
   private targetPxW = 0;
   private targetPxH = 0;
   private coverRect: { left: number; top: number; width: number; height: number } | null = null;
@@ -153,9 +164,11 @@ export class ARRenderer {
       el.style.visibility = 'hidden';
       return;
     }
-    // Contain-fit the media inside the target rectangle, then compose.
+    // Contain-fit the media inside the target rectangle, then compose. The
+    // homography maps the whole target plane, so a shifted rectangle (media
+    // beside the marker) pins just as accurately as one on the marker.
     const fit = Math.min(this.targetPxW / this.planarMediaW, this.targetPxH / this.planarMediaH);
-    const ox = (this.targetPxW - this.planarMediaW * fit) / 2;
+    const ox = (this.targetPxW - this.planarMediaW * fit) / 2 + this.planarShiftX * this.targetPxW;
     const oy = (this.targetPxH - this.planarMediaH * fit) / 2;
     const mediaToTarget: Mat3 = [fit, 0, ox, 0, fit, oy, 0, 0, 1];
     const h = matMul3(targetToScreen, mediaToTarget);
@@ -217,6 +230,7 @@ export class ARRenderer {
 
     // Image / video: homography-warped DOM element (see updatePlanarQuad).
     const source = this.content.source;
+    this.planarShiftX = this.content.type === 'image' && this.content.placement === 'beside' ? 1.15 : 0;
     if (this.content.type === 'image') {
       this.planarMediaW = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
       this.planarMediaH = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
