@@ -1,0 +1,56 @@
+{
+  "name": "@j1ngzoue/fable-react-three-fiber",
+  "version": "0.1.0",
+  "description": "React Three Fiber bindings for the fable-image-tracking engine (markerless image tracking WebAR, built from scratch)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./assets/tracker.wasm": "./assets/tracker.wasm"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "sync-engine": "node scripts/sync-engine.mjs",
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "dev:example": "vite --config example/vite.config.ts",
+    "preview:example": "vite preview --config example/vite.config.ts"
+  },
+  "peerDependencies": {
+    "@react-three/fiber": ">=8",
+    "react": ">=18",
+    "react-dom": ">=18",
+    "three": ">=0.150"
+  },
+  "devDependencies": {
+    "@react-three/fiber": "^8.17.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.166.0",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.166.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.11"
+  },
+  "keywords": [
+    "webar",
+    "image-tracking",
+    "react-three-fiber",
+    "augmented-reality",
+    "computer-vision"
+  ],
+  "license": "MIT"
+}
