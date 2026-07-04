@@ -397,7 +397,7 @@ function startSampleVideo(url: string): void {
   vid.addEventListener(
     'loadeddata',
     () => {
-      renderer?.setContent({ type: 'video', source: vid });
+      renderer?.setContent({ type: 'planar', items: [{ source: vid }] });
       lastContentValue = 'video';
     },
     { once: true }
@@ -448,14 +448,38 @@ function applyContent(value: string): void {
       break;
     case 'image-side':
       cleanupContentVideo();
-      renderer?.setContent({ type: 'image', source: createSampleImageCanvas(), placement: 'beside' });
+      renderer?.setContent({
+        type: 'planar',
+        items: [{ source: cloneCanvas(createSampleImageCanvas()), offsetX: 1.15 }],
+      });
       lastContentValue = 'image-side';
+      break;
+    case 'image-both':
+      cleanupContentVideo();
+      // Any number of planar items, each with its own offset in the plane.
+      renderer?.setContent({
+        type: 'planar',
+        items: [
+          { source: cloneCanvas(createSampleImageCanvas()) },
+          { source: cloneCanvas(createSampleImageCanvas()), offsetX: 1.15 },
+        ],
+      });
+      lastContentValue = 'image-both';
       break;
     default: // image
       cleanupContentVideo();
-      renderer?.setContent({ type: 'image', source: createSampleImageCanvas() });
+      renderer?.setContent({ type: 'planar', items: [{ source: cloneCanvas(createSampleImageCanvas()) }] });
       lastContentValue = 'image';
   }
+}
+
+/** Each planar item needs its own DOM node; the sample canvas is cached. */
+function cloneCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  canvas.getContext('2d')!.drawImage(source, 0, 0);
+  return canvas;
 }
 
 contentSelect.addEventListener('change', () => applyContent(contentSelect.value));

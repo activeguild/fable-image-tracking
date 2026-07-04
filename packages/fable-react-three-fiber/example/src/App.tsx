@@ -5,11 +5,20 @@ import { createSampleImageCanvas } from './sampleContent';
 
 export function App() {
   const [status, setStatus] = useState('initializing');
-  const [placement, setPlacement] = useState<'on' | 'side'>('on');
+  const [placement, setPlacement] = useState<'on' | 'side' | 'both'>('on');
   // The sample target is procedural; a real app passes an image URL instead:
   //   <FableCanvas targetImage="/my-target.png" ...>
   const target = useMemo(() => createSampleTargetCanvas(384), []);
   const contentImage = useMemo(() => createSampleImageCanvas(), []);
+  // Each <PlanarContent> mounts its own DOM node, so simultaneous copies of
+  // the (cached) sample canvas need their own clones.
+  const contentImage2 = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = contentImage.width;
+    canvas.height = contentImage.height;
+    canvas.getContext('2d')!.drawImage(contentImage, 0, 0);
+    return canvas;
+  }, [contentImage]);
 
   return (
     <>
@@ -25,8 +34,10 @@ export function App() {
           onLost={() => setStatus('searching')}
         >
           {/* Flat media is automatically routed to the pixel-accurate
-              homography overlay; meshes ride on the 3D pose. */}
-          <PlanarContent source={contentImage} offset={placement === 'side' ? { x: 1.15 } : undefined} />
+              homography overlay; meshes ride on the 3D pose. Declare as many
+              PlanarContent items as needed, each with its own offset. */}
+          {placement !== 'side' && <PlanarContent source={contentImage} />}
+          {placement !== 'on' && <PlanarContent source={contentImage2} offset={{ x: 1.15 }} />}
           <mesh position={[0, 0, 0.03]}>
             <boxGeometry args={[0.06, 0.06, 0.06]} />
             <meshStandardMaterial color="hotpink" />
@@ -55,7 +66,7 @@ export function App() {
         <select
           id="placement-select"
           value={placement}
-          onChange={(e) => setPlacement(e.target.value as 'on' | 'side')}
+          onChange={(e) => setPlacement(e.target.value as 'on' | 'side' | 'both')}
           style={{
             background: '#1f2937',
             color: '#e5e7eb',
@@ -67,6 +78,7 @@ export function App() {
         >
           <option value="on">画像（マーカー上）</option>
           <option value="side">画像（マーカー横）</option>
+          <option value="both">画像（両方）</option>
         </select>
       </div>
     </>
