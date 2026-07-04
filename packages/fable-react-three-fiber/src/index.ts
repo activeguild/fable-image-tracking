@@ -1,6 +1,7 @@
 export { FableCanvas, type FableCanvasProps } from './FableCanvas';
 export { FableCamera, type FableCameraProps } from './FableCamera';
 export { ImageTracker, type ImageTrackerProps } from './ImageTracker';
+export { PlanarContent, type PlanarContentProps } from './PlanarContent';
 export { useFable, type FableContextValue } from './context';
 export {
   FableEngine,

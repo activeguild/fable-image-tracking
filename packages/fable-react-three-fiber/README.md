@@ -24,11 +24,15 @@ cp node_modules/@j1ngzoue/fable-react-three-fiber/assets/tracker.wasm public/
 ## 使い方
 
 ```jsx
-import { FableCanvas, FableCamera, ImageTracker } from '@j1ngzoue/fable-react-three-fiber';
+import { FableCanvas, FableCamera, ImageTracker, PlanarContent } from '@j1ngzoue/fable-react-three-fiber';
 
 export default function App() {
   return (
-    <FableCanvas targetImage="/my-target.png" style={{ width: '100vw', height: '100vh' }}>
+    <FableCanvas
+      targetImage="/my-target.png"
+      style={{ width: '100vw', height: '100vh' }}
+      overlay={<PlanarContent source="/my-photo.png" />}
+    >
       <FableCamera />
       <ImageTracker onFound={() => console.log('found!')}>
         <mesh position={[0, 0, 0.03]}>
@@ -42,6 +46,13 @@ export default function App() {
   );
 }
 ```
+
+> **平面コンテンツは `<PlanarContent>`（overlay）を使ってください。**
+> ターゲット平面上に置く画像・動画を `<ImageTracker>` 内の 3D プレーンで表示すると、
+> 6DoF ポーズ（カメラ内部パラメータの仮定を含む）を経由するぶん数 px のズレが出ます。
+> `<PlanarContent>` は計測ホモグラフィそのままの CSS matrix3d で貼るので、
+> 張り付き精度がトラッカーの計測精度と一致します（本体アプリと同じ品質）。
+> 立体的な 3D コンテンツには `<ImageTracker>` を使います。
 
 カメラ映像は**フレーム同期表示**です: トラッカーが処理を終えたフレームを、そのフレームで計測した
 アンカー姿勢と同じペイントで表示するため、遅延がマーカーずれとして見えません（商用エンジンと同方式）。
@@ -62,6 +73,20 @@ export default function App() {
 | `dpr` | `number \| [number, number]` | - | 3D キャンバスの devicePixelRatio |
 | `onReady` | `(info) => void` | - | ターゲットコンパイル完了時 |
 | `onError` | `(err) => void` | - | カメラ起動失敗など |
+| `overlay` | `ReactNode` | - | カメラと 3D キャンバスの間の DOM レイヤー（`<PlanarContent>` 用） |
+
+### `<PlanarContent>`
+
+ターゲット平面上の画像・動画を、計測ホモグラフィ（CSS matrix3d）でピクセル精度で貼り付けます。
+`<FableCanvas overlay={...}>` に渡して使います（R3F シーンの中ではなく DOM レイヤー）。
+信頼度ゲート連動のフェード（トラッキングが弱い間は非表示）付き。
+
+| prop | 型 | 説明 |
+| --- | --- | --- |
+| `source` | `string \| HTMLImageElement \| HTMLCanvasElement \| HTMLVideoElement` | 表示するメディア（URL または要素） |
+| `style` | `CSSProperties` | ラッパー要素への追加スタイル |
+
+動画を渡す場合は `muted` + `playsInline` を設定し、ユーザージェスチャ内で `play()` を呼んでください（iOS の自動再生制約）。
 
 ### `<FableCamera>`
 

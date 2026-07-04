@@ -11,6 +11,12 @@ export interface FableContextValue {
   startCamera: () => Promise<void>;
   /** Subscribe to per-result tracking frames. Returns an unsubscriber. */
   onFrame: (listener: (frame: FableFrame) => void) => () => void;
+  /**
+   * Cover-fit placement of the camera image inside the container, in
+   * container-local CSS pixels (null until the camera is running). Overlay
+   * layers use it to map processing-frame coordinates to the screen.
+   */
+  coverRect: { left: number; top: number; width: number; height: number } | null;
 }
 
 export const FableContext = createContext<FableContextValue | null>(null);

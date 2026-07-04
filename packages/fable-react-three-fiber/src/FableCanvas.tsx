@@ -45,6 +45,12 @@ export interface FableCanvasProps {
   dpr?: number | [number, number];
   onReady?: (info: FableTargetInfo) => void;
   onError?: (error: Error) => void;
+  /**
+   * DOM overlay layer between the camera canvas and the 3D canvas — e.g.
+   * <PlanarContent> for homography-pinned flat media. Rendered with the
+   * tracking context available, outside the R3F scene.
+   */
+  overlay?: ReactNode;
   children?: ReactNode;
 }
 
@@ -66,6 +72,7 @@ export function FableCanvas({
   dpr,
   onReady,
   onError,
+  overlay,
   children,
 }: FableCanvasProps): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -157,8 +164,9 @@ export function FableCanvas({
       startCamera,
       onFrame: (listener: (frame: FableFrame) => void) =>
         engineRef.current ? engineRef.current.onFrame(listener) : () => {},
+      coverRect,
     }),
-    [targetInfo, started, startCamera]
+    [targetInfo, started, startCamera, coverRect]
   );
 
   const overlayStyle: CSSProperties = coverRect
@@ -181,6 +189,11 @@ export function FableCanvas({
         {/* Frame source only; the visible image is the frame-synced canvas. */}
         <video ref={videoRef} autoPlay muted playsInline style={{ ...overlayStyle, visibility: 'hidden' }} />
         <canvas ref={camCanvasRef} style={overlayStyle} />
+        {overlay && (
+          <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+            {overlay}
+          </div>
+        )}
         <div style={overlayStyle}>
           <Canvas
             gl={{ alpha: true, antialias: true }}
