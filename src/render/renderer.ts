@@ -17,10 +17,22 @@ import type { Pose, CameraIntrinsics } from '../core/pose';
 import { Vector3Filter } from '../core/filter';
 import { computeHomography, matMul3, type Mat3, type Point2 } from '../core/homography';
 
+/**
+ * One flat media item on the target plane. `offsetX`/`offsetY` place it in
+ * target-size units (0,0 = on the marker; x=1.15 = one target width plus a
+ * gap to the right). Any number of items can be shown at once - the
+ * homography maps the whole plane, so off-marker items pin just as
+ * accurately as on-marker ones.
+ */
+export interface PlanarItemSpec {
+  source: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
+  offsetX?: number;
+  offsetY?: number;
+}
+
 export type ContentSpec =
   | { type: 'cube' }
-  | { type: 'image'; source: HTMLImageElement | HTMLCanvasElement }
-  | { type: 'video'; source: HTMLVideoElement };
+  | { type: 'planar'; items: PlanarItemSpec[] };
 
 export class ARRenderer {
   private renderer: THREE.WebGLRenderer;
@@ -37,9 +49,14 @@ export class ARRenderer {
   // matrix3d). This bypasses the 3-D pose - and therefore any camera
   // intrinsics error - entirely: the pinning is as accurate as the tracker's
   // own point measurements.
-  private planarEl: HTMLElement | null = null;
-  private planarMediaW = 1;
-  private planarMediaH = 1;
+  // One entry per planar item, each with its own media size and placement.
+  private planarItems: {
+    el: HTMLElement;
+    mediaW: number;
+    mediaH: number;
+    offsetX: number;
+    offsetY: number;
+  }[] = [];
   private targetPxW = 0;
   private targetPxH = 0;
   private coverRect: { left: number; top: number; width: number; height: number } | null = null;
@@ -108,7 +125,7 @@ export class ARRenderer {
    * trust), 1 shows it. The planar element fades via CSS; 3D content toggles.
    */
   setContentOpacity(opacity: number): void {
-    if (this.planarEl) this.planarEl.style.opacity = String(opacity);
+    for (const item of this.planarItems) item.el.style.opacity = String(opacity);
     this.contentGroup.visible = opacity > 0.05;
   }
 
@@ -129,11 +146,13 @@ export class ARRenderer {
    * processing-frame coordinates. Pass null to hide it.
    */
   updatePlanarQuad(cornersProc: Point2[] | null, procW: number, procH: number): void {
-    const el = this.planarEl;
-    if (!el) return;
+    if (this.planarItems.length === 0) return;
     const rect = this.coverRect;
+    const hideAll = () => {
+      for (const item of this.planarItems) item.el.style.visibility = 'hidden';
+    };
     if (!cornersProc || !rect || this.targetPxW === 0) {
-      el.style.visibility = 'hidden';
+      hideAll();
       return;
     }
     const sx = rect.width / procW;
@@ -150,26 +169,29 @@ export class ARRenderer {
     ];
     const targetToScreen = computeHomography(targetRect, screenCorners);
     if (!targetToScreen) {
-      el.style.visibility = 'hidden';
+      hideAll();
       return;
     }
-    // Contain-fit the media inside the target rectangle, then compose.
-    const fit = Math.min(this.targetPxW / this.planarMediaW, this.targetPxH / this.planarMediaH);
-    const ox = (this.targetPxW - this.planarMediaW * fit) / 2;
-    const oy = (this.targetPxH - this.planarMediaH * fit) / 2;
-    const mediaToTarget: Mat3 = [fit, 0, ox, 0, fit, oy, 0, 0, 1];
-    const h = matMul3(targetToScreen, mediaToTarget);
-    if (Math.abs(h[8]) < 1e-12) {
-      el.style.visibility = 'hidden';
-      return;
+    // Contain-fit each item's media inside its (possibly offset) target
+    // rectangle, then compose with the shared plane homography.
+    for (const item of this.planarItems) {
+      const fit = Math.min(this.targetPxW / item.mediaW, this.targetPxH / item.mediaH);
+      const ox = (this.targetPxW - item.mediaW * fit) / 2 + item.offsetX * this.targetPxW;
+      const oy = (this.targetPxH - item.mediaH * fit) / 2 + item.offsetY * this.targetPxH;
+      const mediaToTarget: Mat3 = [fit, 0, ox, 0, fit, oy, 0, 0, 1];
+      const h = matMul3(targetToScreen, mediaToTarget);
+      if (Math.abs(h[8]) < 1e-12) {
+        item.el.style.visibility = 'hidden';
+        continue;
+      }
+      for (let i = 0; i < 9; i++) h[i] /= h[8];
+      item.el.style.transform =
+        `matrix3d(${h[0]},${h[3]},0,${h[6]},` +
+        `${h[1]},${h[4]},0,${h[7]},` +
+        `0,0,1,0,` +
+        `${h[2]},${h[5]},0,1)`;
+      item.el.style.visibility = 'visible';
     }
-    for (let i = 0; i < 9; i++) h[i] /= h[8];
-    el.style.transform =
-      `matrix3d(${h[0]},${h[3]},0,${h[6]},` +
-      `${h[1]},${h[4]},0,${h[7]},` +
-      `0,0,1,0,` +
-      `${h[2]},${h[5]},0,1)`;
-    el.style.visibility = 'visible';
   }
 
   private rebuildDebugHelpers(): void {
@@ -198,10 +220,8 @@ export class ARRenderer {
   private rebuildContent(): void {
     disposeChildren(this.contentGroup);
     this.spinTarget = null;
-    if (this.planarEl) {
-      this.planarEl.remove();
-      this.planarEl = null;
-    }
+    for (const item of this.planarItems) item.el.remove();
+    this.planarItems = [];
 
     if (this.content.type === 'cube') {
       const s = this.targetW * 0.22;
@@ -215,22 +235,35 @@ export class ARRenderer {
       return;
     }
 
-    // Image / video: homography-warped DOM element (see updatePlanarQuad).
-    const source = this.content.source;
-    if (this.content.type === 'image') {
-      this.planarMediaW = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
-      this.planarMediaH = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
-    } else {
-      const vid = source as HTMLVideoElement;
-      this.planarMediaW = vid.videoWidth || 16;
-      this.planarMediaH = vid.videoHeight || 9;
+    // Flat media: homography-warped DOM elements (see updatePlanarQuad).
+    // Each item needs its own DOM node; the caller passes distinct elements.
+    for (const spec of this.content.items) {
+      const el = spec.source;
+      let mediaW: number;
+      let mediaH: number;
+      if (el instanceof HTMLImageElement) {
+        mediaW = el.naturalWidth || 1;
+        mediaH = el.naturalHeight || 1;
+      } else if (el instanceof HTMLVideoElement) {
+        mediaW = el.videoWidth || 16;
+        mediaH = el.videoHeight || 9;
+      } else {
+        mediaW = el.width;
+        mediaH = el.height;
+      }
+      el.classList.add('planar-content');
+      el.style.width = `${mediaW}px`;
+      el.style.height = `${mediaH}px`;
+      el.style.visibility = 'hidden';
+      this.container.appendChild(el);
+      this.planarItems.push({
+        el,
+        mediaW,
+        mediaH,
+        offsetX: spec.offsetX ?? 0,
+        offsetY: spec.offsetY ?? 0,
+      });
     }
-    source.classList.add('planar-content');
-    source.style.width = `${this.planarMediaW}px`;
-    source.style.height = `${this.planarMediaH}px`;
-    source.style.visibility = 'hidden';
-    this.container.appendChild(source);
-    this.planarEl = source;
   }
 
   setVideoSize(width: number, height: number): void {
