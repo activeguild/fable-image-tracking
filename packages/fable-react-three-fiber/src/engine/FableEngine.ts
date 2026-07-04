@@ -311,6 +311,12 @@ export class FableEngine {
 }
 
 async function resolveTarget(target: TargetSource): Promise<HTMLCanvasElement> {
+  if (typeof target === 'string' && /\.zpt(\?|#|$)/i.test(target)) {
+    throw new Error(
+      'Zappar .zpt training files are not supported (nor needed): pass the ' +
+        'original target image (PNG/JPG) instead - features are compiled at runtime.'
+    );
+  }
   if (typeof target === 'string') {
     const img = new Image();
     img.crossOrigin = 'anonymous';

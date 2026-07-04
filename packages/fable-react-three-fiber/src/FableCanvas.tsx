@@ -52,6 +52,12 @@ export interface FableCanvasProps {
   className?: string;
   /** Device pixel ratio for the 3D canvas (react-three-fiber `dpr`). */
   dpr?: number | [number, number];
+  /**
+   * Extra WebGL renderer parameters for the 3D canvas (merged over the
+   * defaults `{ alpha: true, antialias: true }`), e.g.
+   * `{ preserveDrawingBuffer: true }` for screenshots.
+   */
+  gl?: Record<string, unknown>;
   onReady?: (info: FableTargetInfo) => void;
   onError?: (error: Error) => void;
   children?: ReactNode;
@@ -73,6 +79,7 @@ export function FableCanvas({
   style,
   className,
   dpr,
+  gl,
   onReady,
   onError,
   children,
@@ -198,7 +205,7 @@ export function FableCanvas({
         <canvas ref={camCanvasRef} style={overlayStyle} />
         <div style={overlayStyle}>
           <Canvas
-            gl={{ alpha: true, antialias: true }}
+            gl={{ alpha: true, antialias: true, ...gl }}
             dpr={dpr}
             style={{ width: '100%', height: '100%' }}
           >

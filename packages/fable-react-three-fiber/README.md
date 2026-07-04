@@ -143,7 +143,17 @@ const { engine, targetInfo, started, startCamera, onFrame } = useFable();
 
 ## Zappar からの移行
 
-`@zappar/zappar-react-three-fiber` とほぼ同じ形で書けます:
+**Zappar のコンポーネント名がそのまま使えます**（`ZapparCanvas` / `ZapparCamera` / `ImageTracker` / `Loader` / `BrowserCompatibility` をエクスポート済み）。既存コードは基本的に import 文の変更と、`.zpt` →元画像への差し替えだけで動きます:
+
+```diff
+- import { ZapparCamera, ImageTracker, ZapparCanvas } from '@zappar/zappar-react-three-fiber';
++ import { ZapparCamera, ImageTracker, ZapparCanvas } from '@j1ngzoue/fable-react-three-fiber';
+
+- const targetFile = 'example-tracking-image.zpt';
++ const targetFile = 'example-tracking-image.png'; // 学習ファイル不要、元画像でOK
+```
+
+Zappar 固有の props（`userFacing` / `makeDefault` / `mirrorMode` 等）は受け付けた上で無視されるので、型エラーになりません（`userFacing` など動作が変わるものは console に警告を出します）。対応表:
 
 | Zappar | 本パッケージ | 備考 |
 | --- | --- | --- |
@@ -153,7 +163,7 @@ const { engine, targetInfo, started, startCamera, onFrame } = useFable();
 | `onVisible` / `onNotVisible` / `onNewAnchor` | 同名で使用可 | `anchor.id` 付き |
 | 座標系（中心原点・y 上・z 手前） | 同じ | |
 | 単位（高さ = 2、上端 y=+1） | デフォルトで同じ | 物理サイズ基準にしたい場合は `targetWidthMeters` を明示 |
-| `<Loader>` / `<BrowserCompatibility>` | なし | `onReady` / `onError` で代替 |
+| `<Loader>` / `<BrowserCompatibility>` | 同名で使用可 | Loader はターゲットコンパイル完了まで表示、BrowserCompatibility は非対応ブラウザでのみ children を表示 |
 | 顔・インスタントトラッキング | 非対応 | 画像トラッキング専用 |
 
 追加機能: ターゲット平面上のメディアは `<PlanarContent>`（マテリアルを子に取る平面メッシュ）を使うと、ポーズ非経由のホモグラフィ精度でピン留めされます。
