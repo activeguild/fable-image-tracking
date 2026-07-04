@@ -1,6 +1,6 @@
 # @j1ngzoue/fable-react-three-fiber
 
-[fable-image-tracking](../..) のトラッキングエンジン（スクラッチ実装のマーカーレス画像トラッキング）を
+[fable-image-tracking](https://github.com/activeguild/fable-image-tracking) のトラッキングエンジン（スクラッチ実装のマーカーレス画像トラッキング）を
 [React Three Fiber](https://github.com/pmndrs/react-three-fiber) で使うためのバインディングです。
 API は [@j1ngzoue/8thwall-react-three-fiber](https://github.com/activeguild/8thwall-react-three-fiber) と同じ使い勝手を踏襲しています。
 
