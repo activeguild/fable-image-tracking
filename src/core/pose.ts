@@ -106,12 +106,39 @@ export function orthogonalityDefect(H: Mat3, K: CameraIntrinsics): number {
  * `H` maps plane meters -> image pixels (same convention as
  * poseFromHomography). Returns the input pose if refinement cannot improve.
  */
+/**
+ * Optional temporal prior for refinePlanarPose. Out-of-plane rotation
+ * (tilt) is ill-conditioned for near-frontal planar targets: homography
+ * noise turns into large tilt wobble that on-plane content never shows but
+ * content raised above the plane amplifies (lever arm). An adaptive prior
+ * toward the previous pose damps exactly those ill-observed directions -
+ * noise-level deviations are pulled back hard, while real motion (large
+ * deviations) passes almost unweighted (Geman-McClure style reweighting).
+ */
+export interface PosePrior {
+  pose: Pose;
+  /** Rotation weight in px^2/rad^2 (before robust reweighting). */
+  rotWeight: number;
+  /** Rotation deviation (rad) where the robust weight halves. */
+  rotScale: number;
+  /** Translation weight in px^2/m^2 (before robust reweighting). */
+  transWeight: number;
+  /** Translation deviation (m) where the robust weight halves. */
+  transScale: number;
+}
+
+/** Default prior weights used by the tracker. */
+export function defaultPosePrior(pose: Pose): PosePrior {
+  return { pose, rotWeight: 2.5e5, rotScale: 0.02, transWeight: 2e4, transScale: 0.02 };
+}
+
 export function refinePlanarPose(
   pose: Pose,
   K: CameraIntrinsics,
   H: Mat3,
   widthMeters: number,
-  heightMeters: number
+  heightMeters: number,
+  prior?: PosePrior
 ): Pose {
   // 3x3 grid over the target in plane meters.
   const pts: [number, number][] = [];
@@ -130,7 +157,36 @@ export function refinePlanarPose(
 
   let R = pose.R.slice() as Mat3;
   let t: [number, number, number] = [pose.t[0], pose.t[1], pose.t[2]];
-  let best = { R, t, err: reprojError(R, t, K, pts, obs) };
+
+  // Robust prior weights, fixed from the initial (this frame's measured)
+  // deviation so real motion is not fought during the iterations.
+  let lRot = 0;
+  let lTrans = 0;
+  if (prior) {
+    const r0 = rotVecBetween(pose.R, prior.pose.R);
+    const rMag = Math.hypot(r0[0], r0[1], r0[2]);
+    const tMag = Math.hypot(
+      pose.t[0] - prior.pose.t[0],
+      pose.t[1] - prior.pose.t[1],
+      pose.t[2] - prior.pose.t[2]
+    );
+    lRot = prior.rotWeight / (1 + (rMag / prior.rotScale) ** 2);
+    lTrans = prior.transWeight / (1 + (tMag / prior.transScale) ** 2);
+  }
+
+  const cost = (Rc: Mat3, tc: [number, number, number]): number => {
+    let c = reprojError(Rc, tc, K, pts, obs);
+    if (prior) {
+      const rv = rotVecBetween(Rc, prior.pose.R);
+      c += lRot * (rv[0] ** 2 + rv[1] ** 2 + rv[2] ** 2);
+      c +=
+        lTrans *
+        ((tc[0] - prior.pose.t[0]) ** 2 + (tc[1] - prior.pose.t[1]) ** 2 + (tc[2] - prior.pose.t[2]) ** 2);
+    }
+    return c;
+  };
+
+  let best = { R, t, err: cost(R, t) };
 
   for (let iter = 0; iter < 5; iter++) {
     // Normal equations JtJ (6x6) and Jtr for residual r = proj - obs,
@@ -167,6 +223,17 @@ export function refinePlanarPose(
       }
     }
     if (!valid) break;
+    // Temporal prior: cost lRot*|dw + rDev|^2 + lTrans*|dv + tDev|^2 where
+    // rDev/tDev are the current deviations from the previous pose.
+    if (prior) {
+      const rDev = rotVecBetween(R, prior.pose.R);
+      for (let i = 0; i < 3; i++) {
+        JtJ[i * 6 + i] += lRot;
+        Jtr[i] += lRot * rDev[i];
+        JtJ[(i + 3) * 6 + (i + 3)] += lTrans;
+        Jtr[i + 3] += lTrans * (t[i] - prior.pose.t[i]);
+      }
+    }
     const delta = solve6(JtJ, Jtr);
     if (!delta) break;
     // Newton step: parameters move against the gradient.
@@ -177,7 +244,7 @@ export function refinePlanarPose(
       dR[3] * t[0] + dR[4] * t[1] + dR[5] * t[2] - delta[4],
       dR[6] * t[0] + dR[7] * t[1] + dR[8] * t[2] - delta[5],
     ];
-    const err = reprojError(Rn, tn, K, pts, obs);
+    const err = cost(Rn, tn);
     if (!(err < best.err)) break;
     R = Rn;
     t = tn;
@@ -185,6 +252,37 @@ export function refinePlanarPose(
     if (err < 1e-8) break;
   }
   return { R: best.R, t: best.t };
+}
+
+/**
+ * Rotation vector (axis * angle, rad) of Ra relative to Rb, i.e.
+ * rotvec(Ra * Rb^T) in the left-perturbation convention used above.
+ */
+function rotVecBetween(Ra: Mat3, Rb: Mat3): [number, number, number] {
+  // D = Ra * Rb^T
+  const D: Mat3 = [
+    Ra[0] * Rb[0] + Ra[1] * Rb[1] + Ra[2] * Rb[2],
+    Ra[0] * Rb[3] + Ra[1] * Rb[4] + Ra[2] * Rb[5],
+    Ra[0] * Rb[6] + Ra[1] * Rb[7] + Ra[2] * Rb[8],
+    Ra[3] * Rb[0] + Ra[4] * Rb[1] + Ra[5] * Rb[2],
+    Ra[3] * Rb[3] + Ra[4] * Rb[4] + Ra[5] * Rb[5],
+    Ra[3] * Rb[6] + Ra[4] * Rb[7] + Ra[5] * Rb[8],
+    Ra[6] * Rb[0] + Ra[7] * Rb[1] + Ra[8] * Rb[2],
+    Ra[6] * Rb[3] + Ra[7] * Rb[4] + Ra[8] * Rb[5],
+    Ra[6] * Rb[6] + Ra[7] * Rb[7] + Ra[8] * Rb[8],
+  ];
+  const skew: [number, number, number] = [
+    (D[7] - D[5]) / 2,
+    (D[2] - D[6]) / 2,
+    (D[3] - D[1]) / 2,
+  ];
+  const c = Math.max(-1, Math.min(1, (D[0] + D[4] + D[8] - 1) / 2));
+  const theta = Math.acos(c);
+  if (theta < 1e-6) return skew;
+  const s = Math.sin(theta);
+  if (Math.abs(s) < 1e-9) return skew; // ~180 deg: never a frame-to-frame case
+  const f = theta / s;
+  return [skew[0] * f, skew[1] * f, skew[2] * f];
 }
 
 function reprojError(

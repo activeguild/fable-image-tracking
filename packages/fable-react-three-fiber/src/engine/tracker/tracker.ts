@@ -25,6 +25,7 @@ import {
   type Point2,
 } from '../core/homography';
 import {
+  defaultPosePrior,
   orthogonalityDefect,
   poseFromHomography,
   refinePlanarPose,
@@ -105,6 +106,8 @@ export class ImageTracker {
   private k1 = 0;
   /** Gyro rotation homography of the previously processed interval. */
   private prevGyroH: Mat3 | null = null;
+  /** Previous refined pose: temporal prior damping out-of-plane wobble. */
+  private prevPose: Pose | null = null;
   // Calibration hysteresis: apply a step only after consecutive evaluations
   // agree on the direction, so measurement noise cannot random-walk f/k1
   // (they are weakly coupled and would otherwise co-drift).
@@ -190,6 +193,7 @@ export class ImageTracker {
     this.state = 'searching';
     this.H = null;
     this.prevH = null;
+    this.prevPose = null;
     this.framePoints = [];
     this.modelPoints = [];
     this.prevPyramid = null;
@@ -553,6 +557,7 @@ export class ImageTracker {
     this.state = 'searching';
     this.H = null;
     this.prevH = null;
+    this.prevPose = null;
     this.framePoints = [];
     this.modelPoints = [];
   }
@@ -671,7 +676,9 @@ export class ImageTracker {
     // Refine the decomposed pose against the measured homography: the raw
     // decomposition's orthonormalization moves the plane's reprojection by
     // several pixels under noise, which pose-anchored content shows as a
-    // constant offset from the marker.
+    // constant offset from the marker. The previous refined pose acts as an
+    // adaptive prior, damping the ill-conditioned out-of-plane rotation
+    // noise that makes content raised above the plane float around.
     let pose = poseFromHomography(this.planeToFrame, this.intrinsics);
     if (pose) {
       pose = refinePlanarPose(
@@ -679,9 +686,11 @@ export class ImageTracker {
         this.intrinsics,
         this.planeToFrame,
         this.target.widthMeters,
-        this.target.heightMeters
+        this.target.heightMeters,
+        this.prevPose ? defaultPosePrior(this.prevPose) : undefined
       );
     }
+    this.prevPose = pose;
     return {
       state: this.state,
       H: this.H,
