@@ -28,13 +28,12 @@ import { FableCanvas, FableCamera, ImageTracker, PlanarContent } from '@j1ngzoue
 
 export default function App() {
   return (
-    <FableCanvas
-      targetImage="/my-target.png"
-      style={{ width: '100vw', height: '100vh' }}
-      overlay={<PlanarContent source="/my-photo.png" />}
-    >
+    <FableCanvas targetImage="/my-target.png" style={{ width: '100vw', height: '100vh' }}>
       <FableCamera />
       <ImageTracker onFound={() => console.log('found!')}>
+        {/* 平面の画像・動画: 自動で高精度なホモグラフィ表示になる */}
+        <PlanarContent source="/my-photo.png" />
+        {/* 3D オブジェクト: ポーズにアンカーされる */}
         <mesh position={[0, 0, 0.03]}>
           <boxGeometry args={[0.06, 0.06, 0.06]} />
           <meshStandardMaterial color="hotpink" />
@@ -47,12 +46,12 @@ export default function App() {
 }
 ```
 
-> **平面コンテンツは `<PlanarContent>`（overlay）を使ってください。**
-> ターゲット平面上に置く画像・動画を `<ImageTracker>` 内の 3D プレーンで表示すると、
-> 6DoF ポーズ（カメラ内部パラメータの仮定を含む）を経由するぶん数 px のズレが出ます。
-> `<PlanarContent>` は計測ホモグラフィそのままの CSS matrix3d で貼るので、
-> 張り付き精度がトラッカーの計測精度と一致します（本体アプリと同じ品質）。
-> 立体的な 3D コンテンツには `<ImageTracker>` を使います。
+> コンテンツは全部 `<ImageTracker>` の中に書けば OK です。
+> `<PlanarContent>`（平面の画像・動画）は自動的に DOM レイヤーへルーティングされ、
+> 計測ホモグラフィそのままの CSS matrix3d でピクセル精度で貼り付きます。
+> mesh などの 3D オブジェクトは 6DoF ポーズにアンカーされます。ポーズは
+> 再投影誤差最小化（Gauss-Newton）で毎フレーム精密化されるので、マーカーから
+> 離れた位置に置いたコンテンツも安定します。
 
 カメラ映像は**フレーム同期表示**です: トラッカーが処理を終えたフレームを、そのフレームで計測した
 アンカー姿勢と同じペイントで表示するため、遅延がマーカーずれとして見えません（商用エンジンと同方式）。
@@ -73,18 +72,18 @@ export default function App() {
 | `dpr` | `number \| [number, number]` | - | 3D キャンバスの devicePixelRatio |
 | `onReady` | `(info) => void` | - | ターゲットコンパイル完了時 |
 | `onError` | `(err) => void` | - | カメラ起動失敗など |
-| `overlay` | `ReactNode` | - | カメラと 3D キャンバスの間の DOM レイヤー（`<PlanarContent>` 用） |
 
 ### `<PlanarContent>`
 
 ターゲット平面上の画像・動画を、計測ホモグラフィ（CSS matrix3d）でピクセル精度で貼り付けます。
-`<FableCanvas overlay={...}>` に渡して使います（R3F シーンの中ではなく DOM レイヤー）。
+`<FableCanvas>` 内ならどこに書いても動きます（通常は 3D コンテンツと並べて
+`<ImageTracker>` 内に）。実体はカメラと 3D キャンバスの間の DOM レイヤーに
+マウントされるため、カメラ内部パラメータの誤差の影響を受けません。
 信頼度ゲート連動のフェード（トラッキングが弱い間は非表示）付き。
 
 | prop | 型 | 説明 |
 | --- | --- | --- |
 | `source` | `string \| HTMLImageElement \| HTMLCanvasElement \| HTMLVideoElement` | 表示するメディア（URL または要素） |
-| `style` | `CSSProperties` | ラッパー要素への追加スタイル |
 
 動画を渡す場合は `muted` + `playsInline` を設定し、ユーザージェスチャ内で `play()` を呼んでください（iOS の自動再生制約）。
 

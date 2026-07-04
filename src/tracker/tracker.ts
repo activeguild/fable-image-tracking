@@ -24,7 +24,13 @@ import {
   type Mat3,
   type Point2,
 } from '../core/homography';
-import { orthogonalityDefect, poseFromHomography, type CameraIntrinsics, type Pose } from '../core/pose';
+import {
+  orthogonalityDefect,
+  poseFromHomography,
+  refinePlanarPose,
+  type CameraIntrinsics,
+  type Pose,
+} from '../core/pose';
 import {
   DenseAligner,
   distortPoint,
@@ -662,7 +668,20 @@ export class ImageTracker {
     }
     this.planeToFrame = matMul3(this.H, this.target.pixelFromPlane);
     if (this.state === 'tracking') this.calibrateFocal(this.planeToFrame);
-    const pose = poseFromHomography(this.planeToFrame, this.intrinsics);
+    // Refine the decomposed pose against the measured homography: the raw
+    // decomposition's orthonormalization moves the plane's reprojection by
+    // several pixels under noise, which pose-anchored content shows as a
+    // constant offset from the marker.
+    let pose = poseFromHomography(this.planeToFrame, this.intrinsics);
+    if (pose) {
+      pose = refinePlanarPose(
+        pose,
+        this.intrinsics,
+        this.planeToFrame,
+        this.target.widthMeters,
+        this.target.heightMeters
+      );
+    }
     return {
       state: this.state,
       H: this.H,

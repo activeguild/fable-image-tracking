@@ -2,13 +2,16 @@
  * Flat image/video content pinned by the measured homography (CSS matrix3d),
  * bypassing the 3-D pose and therefore any camera-intrinsics error: pinning
  * accuracy equals the tracker's own point-measurement accuracy. Use this for
- * media that lies on the target plane; use <ImageTracker> for 3D content.
+ * media that lies on the target plane; use 3D meshes for volumetric content.
  *
- * Rendered in the <FableCanvas overlay={...}> slot (a DOM layer between the
- * camera canvas and the 3D canvas), not inside the R3F scene.
+ * Declare it anywhere inside <FableCanvas> - typically next to your 3D
+ * content inside <ImageTracker>. It renders nothing in place: the media
+ * element is mounted imperatively into FableCanvas's DOM overlay layer
+ * (between the camera canvas and the 3D canvas), so the same component works
+ * in the React DOM tree and inside the react-three-fiber scene.
  */
 
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useFable } from './context';
 import { QuadFilter } from './engine/core/quadfilter';
 import { computeHomography, matMul3, type Mat3, type Point2 } from './engine/core/homography';
@@ -16,20 +19,17 @@ import { computeHomography, matMul3, type Mat3, type Point2 } from './engine/cor
 export interface PlanarContentProps {
   /** Media shown on the target: URL or an image/canvas/video element. */
   source: string | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
-  style?: CSSProperties;
 }
 
-export function PlanarContent({ source, style }: PlanarContentProps): ReactNode {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const { onFrame, targetInfo, coverRect } = useFable();
+export function PlanarContent({ source }: PlanarContentProps): ReactNode {
+  const { onFrame, targetInfo, coverRect, overlayContainer } = useFable();
 
   // Latest layout/target info for the frame subscription without resubscribing.
   const layoutRef = useRef({ targetInfo, coverRect });
   layoutRef.current = { targetInfo, coverRect };
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
+    if (!overlayContainer) return;
 
     let element: HTMLElement | null = null;
     let mediaW = 1;
@@ -65,7 +65,7 @@ export function PlanarContent({ source, style }: PlanarContentProps): ReactNode 
         transition: 'opacity 0.12s linear',
         visibility: 'hidden',
       } satisfies Partial<CSSStyleDeclaration>);
-      host.appendChild(el);
+      overlayContainer.appendChild(el);
       element = el;
     };
 
@@ -135,12 +135,7 @@ export function PlanarContent({ source, style }: PlanarContentProps): ReactNode 
       off();
       element?.remove();
     };
-  }, [source, onFrame]);
+  }, [source, onFrame, overlayContainer]);
 
-  return (
-    <div
-      ref={hostRef}
-      style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', ...style }}
-    />
-  );
+  return null;
 }

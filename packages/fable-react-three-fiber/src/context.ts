@@ -17,6 +17,12 @@ export interface FableContextValue {
    * layers use it to map processing-frame coordinates to the screen.
    */
   coverRect: { left: number; top: number; width: number; height: number } | null;
+  /**
+   * DOM layer between the camera canvas and the 3D canvas. <PlanarContent>
+   * mounts its media here, which lets it be declared anywhere in the tree
+   * (including inside <ImageTracker> in the R3F scene).
+   */
+  overlayContainer: HTMLElement | null;
 }
 
 export const FableContext = createContext<FableContextValue | null>(null);

@@ -17,16 +17,15 @@ export function App() {
         style={{ width: '100vw', height: '100vh' }}
         onReady={() => setStatus('searching')}
         onError={(err) => setStatus(`error: ${err.message}`)}
-        // Flat media on the target plane: the homography-pinned overlay is
-        // pixel-accurate (no camera-intrinsics error), unlike a 3D plane.
-        overlay={<PlanarContent source={contentImage} />}
       >
         <FableCamera />
         <ImageTracker
           onFound={() => setStatus('tracking')}
           onLost={() => setStatus('searching')}
         >
-          {/* 3D content rides on the pose; flat media uses the overlay. */}
+          {/* Flat media is automatically routed to the pixel-accurate
+              homography overlay; meshes ride on the 3D pose. */}
+          <PlanarContent source={contentImage} />
           <mesh position={[0, 0, 0.03]}>
             <boxGeometry args={[0.06, 0.06, 0.06]} />
             <meshStandardMaterial color="hotpink" />
